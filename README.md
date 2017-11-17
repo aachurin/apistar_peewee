@@ -93,7 +93,7 @@ class AnotherCustomer(AnotherModel):
 
 **Creating the database tables**
 
-Before starting you app you will likely need to create the database tables which you can do with the following command:
+Before starting your app you will likely need to create the database tables which you can do with the following command:
 
 ```bash
 $ apistar create_tables
