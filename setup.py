@@ -3,8 +3,8 @@ from setuptools import setup
 
 setup(
     name='apistar-peewee',
-    version='0.1',
-    url='http://github.com/aachurin/apistar-peewee/',
+    version='0.1.1',
+    url='https://github.com/aachurin/apistar_peewee',
     license='BSD',
     author='Andrey Churin',
     author_email='aachurin@gmail.com',
