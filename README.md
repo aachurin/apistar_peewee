@@ -22,7 +22,7 @@ routes = [
 
 # Configure database settings.
 settings = {
-    'DATABASES': {
+    'DATABASE': {
         'default': {
             'database': 'db1',
             'host': '127.0.0.1',
@@ -47,7 +47,7 @@ You can configure as many databases as you need:
 
 ```python
 settings = {
-    'DATABASES': {
+    'DATABASE': {
         'default': {
             'database': 'db1',
             'host': '127.0.0.1',
