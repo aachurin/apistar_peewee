@@ -78,7 +78,8 @@ class PeeweeORM:
 
     def init_database(self, alias: str, config: typing.Dict) -> None:
         models = config.pop('models', None)
-        migrate_dir = config.pop('migrate_dir', 'migrations')
+        default_migrate_dir = 'migrations' if alias == 'default' else 'migrations_' + alias
+        migrate_dir = config.pop('migrate_dir', default_migrate_dir)
         migrate_table = config.pop('migrate_table', 'migratehistory')
         engine = config.pop('engine', None)
         database = self.databases.get(alias)
@@ -139,7 +140,9 @@ def get_model_base(alias: str='default', engine: peewee.Database=None):
         def __init_subclass__(cls, **kwargs):
             super().__init_subclass__(**kwargs)
             if cls.__name__ in orm.models[alias]:
-                raise exceptions.ConfigurationError("model with name %s is already registered")
+                raise exceptions.ConfigurationError(
+                    "model `%s` is already registered for alias `%s`" %
+                    (cls.__name__, alias))
             orm.models[alias][cls.__name__] = cls
 
         class Meta:
@@ -157,7 +160,7 @@ def init_orm(settings: Settings) -> PeeweeORM:
 @contextlib.contextmanager
 def get_session(orm: PeeweeORM, cls: ParamAnnotation) -> typing.Generator[Session, None, None]:
     with orm.get_database(cls._alias).execution_context() as context:
-        yield cls(context, orm.models[cls._alias])
+        yield cls(context, orm.models[cls._alias].copy())
 
 
 def get_database(orm: PeeweeORM, cls: ParamAnnotation) -> peewee.Database:
@@ -203,7 +206,7 @@ def get_migration_router(orm: PeeweeORM, database: str):
 def make_migrations(orm: PeeweeORM, name: str='', database: str='default'):
     """Create migrations (peewee_migrate must be installed)"""
     from datetime import datetime
-    name = name or (database + '_' + datetime.now().strftime('_migration_%Y%m%d%H%M'))
+    name = name or datetime.now().strftime('_migration_%Y%m%d%H%M')
     models = get_non_abstract_models(orm.get_models(database))
     get_migration_router(orm, database).create(name=name, auto=models)
 
