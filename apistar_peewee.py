@@ -262,5 +262,5 @@ commands = [
 def apps_load_hook(app, module, **kwargs):
     # for apistar_apps
     if PeeweeORM.get_instance()._initialized:
-        raise ConfigurationError("PeeweeORM initialized before application loading complete")
+        raise exceptions.ConfigurationError("PeeweeORM initialized before application loading complete")
     PeeweeORM.get_instance()._modules.append(module)
