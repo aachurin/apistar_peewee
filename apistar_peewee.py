@@ -60,6 +60,7 @@ class PeeweeORM:
 
     def __init__(self) -> None:
         self._initialized = False
+        self._modules = []
         self.databases = {}  # type: typing.Dict[str, peewee.Database]
         self.models = {}  # type: typing.Dict[str, typing.Dict[str, peewee.Model]]
 
@@ -75,9 +76,14 @@ class PeeweeORM:
         for alias, database_config in config.items():
             self.init_database(alias, database_config)
         self._initialized = True
+        for module in self._modules:
+            try:
+                importlib.import_module(module.__name__ + '.models')
+            except ImportError:
+                pass
+        del self._modules
 
     def init_database(self, alias: str, config: typing.Dict) -> None:
-        models = config.pop('models', None)
         default_migrate_dir = 'migrations' if alias == 'default' else 'migrations_' + alias
         migrate_dir = config.pop('migrate_dir', default_migrate_dir)
         migrate_table = config.pop('migrate_table', 'migratehistory')
@@ -105,12 +111,6 @@ class PeeweeORM:
             database.init(**config)
             database.migrate_dir = migrate_dir
             database.migrate_table = migrate_table
-
-        if models:
-            if not isinstance(models, (tuple, list)):
-                models = [models]
-            for model in models:
-                importlib.import_module(model)
 
     def get_database(self, alias: str) -> typing.Union[peewee.Database, peewee.Proxy]:
         try:
@@ -257,3 +257,10 @@ commands = [
     Command('list_migrations', list_migrations),
     Command('migrate', migrate)
 ]
+
+
+def apps_load_hook(app, module, **kwargs):
+    # for apistar_apps
+    if PeeweeORM.get_instance()._initialized:
+        raise ConfigurationError("PeeweeORM initialized before application loading complete")
+    PeeweeORM.get_instance()._modules.append(module)
