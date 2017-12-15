@@ -1,13 +1,19 @@
 ## Apistar Peewee ORM
 
-To use this you first need to install `apistar_peewee` and your chosen database driver.
+
+### Install
+
+To use this you first need to install `apistar_peewee` and your chosen database driver:
 
 ```bash
 $ pip install apistar_peewee
 $ pip install psycopg2
 ```
 
-**Settings**
+For Sqlite you do not need any database driver.
+
+
+### Settings
 
 You then need to add the database config to your settings:
 
@@ -68,7 +74,35 @@ settings = {
 }
 ```
 
-**Create a new model**
+Pass arguments to the database engine/driver:
+
+```python
+settings = {
+    'DATABASE': {
+        'default': {
+            'database': 'db1',
+            'engine': 'PooledPostgresqlExtDatabase',
+            'fields': {'varchar': 'varchar'},  # Extra arguments for database driver.
+            'register_hstore': false
+        }
+    }
+}
+
+```
+
+The apistar_peewee config above is similar to this Peewee config:
+
+```python
+db = PooledPostgresqlExtDatabase("db1",
+                                 fields={'varchar': 'varchar'},
+                                 register_hstore=False)
+
+```
+
+
+### Models
+
+Create a new model:
 
 ```python
 from apistar_peewee import get_model_base
@@ -78,6 +112,7 @@ Model = get_model_base()
 
 class Customer(Model):
     name = CharField(max_length=255)
+
 ```
 
 And for all other databases:
@@ -91,7 +126,7 @@ class AnotherCustomer(AnotherModel):
 
 ```
 
-**Creating the database tables**
+**Creating the database tables:**
 
 Before starting your app you will likely need to create the database tables which you can do with the following command:
 
@@ -101,9 +136,16 @@ $ apistar create_tables
 
 For all commands you can specify database using `--database` argument. By default, it's `default`.
 
-**Migrations**
+
+### Migrations
 
 To use migrations you need to install `peewee_migrate`.
+
+```bash
+$ pip install peewee_migrate
+```
+
+With `peewee_migrate` installed you can use the commands:
 
 ```bash
 $ apistar make_migrations
@@ -111,13 +153,16 @@ $ apistar list_migrations
 $ apistar migrate
 ```
 
-To control where the migrations are created, you can specify `migrate_dir` and `migrate_table` settings (for each database). Default values are `migrations` and `migratehistory`.
+To control where the migrations are created,
+you can specify `migrate_dir` and `migrate_table` settings (for each database).
+Default values are `migrations` and `migratehistory`.
 
-**Accessing the database**
 
-To interact with the database, use the `Session` component. This will automatically
-handle commit/rollback behavior, depending on if the view returns normally, or
-raises an exception:
+### Database use
+
+To interact with the database, use the `Session` component.
+This will automatically handle commit/rollback behavior,
+depending on if the view returns normally, or raises an exception:
 
 ```python
 from apistar_peewee import Session
@@ -146,7 +191,7 @@ def list_another_customers(session: Session['another_db']):
 
 ```
 
-In addition, you can use Database instance directly.
+In addition, you can use Database instance directly:
 
 ```python
 from apistar_peewee import Database
@@ -156,4 +201,8 @@ def create_another_customers(db: Database['another_db'], name: str):
     with db.execution_context():
         customer = AnotherCustomer.create(name=name)
     return {'id': customer.id, 'name': customer.name}
+
 ```
+
+
+- For a complete working example see the /examples/ folder.
