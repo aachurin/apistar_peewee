@@ -207,4 +207,4 @@ def create_another_customers(db: Database['another_db'], name: str):
 
 ```
 
-- For a complete working example see the /examples/ folder.
+- For a working minimal example see [/examples/app.py](https://github.com/aachurin/apistar_peewee/blob/master/examples/app.py).
