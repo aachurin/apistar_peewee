@@ -127,6 +127,9 @@ class AnotherCustomer(AnotherModel):
 ```
 
 **Creating the database tables:**
+=======
+All models which name starts with `_` or `Abstract` are abstract models.
+Such models are ignored by `create_tables` and `make_migrations` commands.
 
 Before starting your app you will likely need to create the database tables which you can do with the following command:
 
