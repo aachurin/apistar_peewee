@@ -207,5 +207,4 @@ def create_another_customers(db: Database['another_db'], name: str):
 
 ```
 
-
 - For a complete working example see the /examples/ folder.
