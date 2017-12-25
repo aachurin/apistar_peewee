@@ -87,8 +87,15 @@ class PeeweeORM:
         default_migrate_dir = 'migrations' if alias == 'default' else 'migrations_' + alias
         migrate_dir = config.pop('migrate_dir', default_migrate_dir)
         migrate_table = config.pop('migrate_table', 'migratehistory')
+        init_module = config.pop('preload_module', 'models')
         engine = config.pop('engine', None)
         database = self.databases.get(alias)
+
+        if init_module:
+            try:
+                importlib.import_module(init_module)
+            except ImportError:
+                pass
 
         if database is None or isinstance(database, peewee.Proxy):
             if engine is None:
@@ -174,12 +181,12 @@ components = [
 ]
 
 
-def get_non_abstract_models(models):
+def get_migratable_models(models):
     result = []
     for model in models.values():
         # special case for abstract models
         if (model.__name__.startswith('_') or model.__name__.startswith('Abstract') or
-                getattr(model, '_isabstract', False)):
+                getattr(model, '_nonmigratable', False)):
             continue
         result.append(model)
     return result
@@ -187,7 +194,7 @@ def get_non_abstract_models(models):
 
 def create_tables(orm: PeeweeORM, database: str='default'):
     """Create non-abstract tables"""
-    models = get_non_abstract_models(orm.get_models(database))
+    models = get_migratable_models(orm.get_models(database))
     orm.get_database(database).create_tables(models, safe=True)
 
 
@@ -207,7 +214,7 @@ def make_migrations(orm: PeeweeORM, name: str='', database: str='default'):
     """Create migrations (peewee_migrate must be installed)"""
     from datetime import datetime
     name = name or datetime.now().strftime('_migration_%Y%m%d%H%M')
-    models = get_non_abstract_models(orm.get_models(database))
+    models = get_migratable_models(orm.get_models(database))
     get_migration_router(orm, database).create(name=name, auto=models)
 
 
@@ -220,6 +227,12 @@ def list_migrations(console: Console, orm: PeeweeORM, database: str='default'):
     console.echo('Undone:')
     console.echo('\n'.join(router.diff))
 
+
+def list_models(console: Console, orm: PeeweeORM, database: str='default'):
+    """List all models"""
+    models = get_migratable_models(orm.get_models(database))
+    for model in models:
+        console.echo(model.__name__)
 
 def migrate(console: Console, orm: PeeweeORM, migration: str='', database: str='default'):
     """Run migrations (peewee_migrate must be installed)"""
@@ -255,7 +268,8 @@ commands = [
     Command('drop_tables', drop_tables),
     Command('make_migrations', make_migrations),
     Command('list_migrations', list_migrations),
-    Command('migrate', migrate)
+    Command('list_models', list_models),
+    Command('migrate', migrate),
 ]
 
 
