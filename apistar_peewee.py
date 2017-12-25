@@ -185,8 +185,10 @@ def get_migratable_models(models):
     result = []
     for model in models.values():
         # special case for abstract models
-        if (model.__name__.startswith('_') or model.__name__.startswith('Abstract') or
-                getattr(model, '_nonmigratable', False)):
+        if (model.__name__.startswith('_') or
+            model.__name__.startswith('Abstract') or
+            getattr(model._meta, 'nonmigratable', False) or
+            getattr(model, '_nonmigratable_', False)):
             continue
         result.append(model)
     return result
