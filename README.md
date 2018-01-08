@@ -194,6 +194,7 @@ def list_another_customers(session: Session['another_db']):
 
 ```
 
+
 In addition, you can use Database instance directly:
 
 ```python
