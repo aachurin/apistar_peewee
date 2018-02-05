@@ -1,11 +1,11 @@
+import sys
 import contextlib
 import importlib
 import typing
 import warnings
 import peewee
-from apistar import Command, Component, Settings, exceptions
+from apistar import Component, Settings, exceptions
 from apistar.types import ParamAnnotation
-from apistar.interfaces import Console
 from playhouse import pool
 
 
@@ -91,12 +91,6 @@ class PeeweeORM:
         engine = config.pop('engine', None)
         database = self.databases.get(alias)
 
-        if init_module:
-            try:
-                importlib.import_module(init_module)
-            except ImportError:
-                pass
-
         if database is None or isinstance(database, peewee.Proxy):
             if engine is None:
                 raise exceptions.ConfigurationError("peewee database engine is not specified")
@@ -119,6 +113,12 @@ class PeeweeORM:
             database.migrate_dir = migrate_dir
             database.migrate_table = migrate_table
 
+        if init_module:
+            try:
+                importlib.import_module(init_module)
+            except ImportError:
+                pass
+
     def get_database(self, alias: str) -> typing.Union[peewee.Database, peewee.Proxy]:
         try:
             return self.databases[alias]
@@ -132,7 +132,7 @@ class PeeweeORM:
             raise exceptions.ConfigurationError("unknown database alias `%s`" % alias)
 
 
-def get_model_base(alias: str='default', engine: peewee.Database=None):
+def get_model_base(alias: str='default', engine: peewee.Database=None, **options):
     assert alias, "invalid alias"
     orm = PeeweeORM.get_instance()
     db = orm.databases.get(alias)
@@ -142,6 +142,7 @@ def get_model_base(alias: str='default', engine: peewee.Database=None):
     elif engine is not None:
         warnings.warn("peewee engine `%s` argument was ignored" % engine)
     orm.models.setdefault(alias, {})
+    options['database'] = db
 
     class Model(peewee.Model):
         def __init_subclass__(cls, **kwargs):
@@ -151,9 +152,7 @@ def get_model_base(alias: str='default', engine: peewee.Database=None):
                     "model `%s` is already registered for alias `%s`" %
                     (cls.__name__, alias))
             orm.models[alias][cls.__name__] = cls
-
-        class Meta:
-            database = db
+        Meta = type('Meta', (), options)
 
     return Model
 
@@ -179,104 +178,3 @@ components = [
     Component(Session, init=get_session, preload=False),
     Component(Database, init=get_database, preload=False),
 ]
-
-
-def get_migratable_models(models):
-    result = []
-    for model in models.values():
-        # special case for abstract models
-        if (model.__name__.startswith('_') or
-            model.__name__.startswith('Abstract') or
-            getattr(model._meta, 'nonmigratable', False) or
-            getattr(model, '_nonmigratable_', False)):
-            continue
-        result.append(model)
-    return result
-
-
-def create_tables(orm: PeeweeORM, database: str='default'):
-    """Create non-abstract tables"""
-    models = get_migratable_models(orm.get_models(database))
-    orm.get_database(database).create_tables(models, safe=True)
-
-
-def drop_tables(orm: PeeweeORM, database: str='default'):
-    """Drop all tables"""
-    models = orm.get_models(database)
-    orm.get_database(database).drop_tables(models.values(), safe=True)
-
-
-def get_migration_router(orm: PeeweeORM, database: str):
-    from peewee_migrate import Router
-    database = orm.get_database(database)
-    return Router(database, migrate_dir=database.migrate_dir, migrate_table=database.migrate_table)
-
-
-def make_migrations(orm: PeeweeORM, name: str='', database: str='default'):
-    """Create migrations (peewee_migrate must be installed)"""
-    from datetime import datetime
-    name = name or datetime.now().strftime('_migration_%Y%m%d%H%M')
-    models = get_migratable_models(orm.get_models(database))
-    get_migration_router(orm, database).create(name=name, auto=models)
-
-
-def list_migrations(console: Console, orm: PeeweeORM, database: str='default'):
-    """List migrations (peewee_migrate must be installed)"""
-    router = get_migration_router(orm, database)
-    console.echo('Done:')
-    console.echo('\n'.join(router.done))
-    console.echo('')
-    console.echo('Undone:')
-    console.echo('\n'.join(router.diff))
-
-
-def list_models(console: Console, orm: PeeweeORM, database: str='default'):
-    """List all models"""
-    models = get_migratable_models(orm.get_models(database))
-    for model in models:
-        console.echo(model.__name__)
-
-def migrate(console: Console, orm: PeeweeORM, migration: str='', database: str='default'):
-    """Run migrations (peewee_migrate must be installed)"""
-    router = get_migration_router(orm, database)
-    if migration:
-        run_migrations = []
-        if migration == 'zero' or migration in router.done:
-            downgrade = True
-            for name in reversed(router.done):
-                if name == migration:
-                    break
-                run_migrations.append(name)
-        elif migration in router.diff:
-            downgrade = False
-            for name in router.diff:
-                run_migrations.append(name)
-                if name == migration:
-                    break
-        else:
-            console.echo('Unknown migration %s' % migration)
-    else:
-        downgrade = False
-        run_migrations = router.diff
-    if not run_migrations:
-        console.echo('There is nothing to migrate')
-    else:
-        for name in run_migrations:
-            router.run_one(name, router.migrator, fake=False, downgrade=downgrade)
-
-
-commands = [
-    Command('create_tables', create_tables),
-    Command('drop_tables', drop_tables),
-    Command('make_migrations', make_migrations),
-    Command('list_migrations', list_migrations),
-    Command('list_models', list_models),
-    Command('migrate', migrate),
-]
-
-
-def apps_load_hook(app, module, **kwargs):
-    # for apistar_apps
-    if PeeweeORM.get_instance()._initialized:
-        raise exceptions.ConfigurationError("PeeweeORM initialized before application loading complete")
-    PeeweeORM.get_instance()._modules.append(module)

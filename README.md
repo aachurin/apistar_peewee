@@ -129,12 +129,12 @@ class AnotherCustomer(AnotherModel):
 **Creating the database tables:**
 =======
 All models which name starts with `_` or `Abstract` are abstract models.
-Such models are ignored by `create_tables` and `make_migrations` commands.
+Such models are ignored by `createtables` and `makemigrations` commands.
 
 Before starting your app you will likely need to create the database tables which you can do with the following command:
 
 ```bash
-$ apistar create_tables
+$ apistar createtables
 ```
 
 For all commands you can specify database using `--database` argument. By default, it's `default`.
@@ -142,18 +142,30 @@ For all commands you can specify database using `--database` argument. By defaul
 
 ### Migrations
 
-To use migrations you need to install `peewee_migrate`.
-
+Create new migration:
 ```bash
-$ pip install peewee_migrate
+$ apistar makemigrations
+Migration `001_migration_201802051935` has been created.
 ```
 
-With `peewee_migrate` installed you can use the commands:
-
+List migrations:
 ```bash
-$ apistar make_migrations
-$ apistar list_migrations
+$ apistar listmigrations
+[ ] 001_migration_201802051935
+```
+
+Show migration operations:
+```bash
+$ apistar showmigrations
+[ ] 001_migration_201802051935:
+  SQL> CREATE TABLE "model1" ("id" SERIAL NOT NULL PRIMARY KEY, "test1" VARCHAR(100) NOT NULL) 
+  Python> add_step(step='001_migration_201802051935')
+```
+
+Run migrations:
+```bash
 $ apistar migrate
+[X] 001_migration_201802051935
 ```
 
 To control where the migrations are created,

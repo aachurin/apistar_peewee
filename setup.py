@@ -3,17 +3,17 @@ from setuptools import setup
 
 setup(
     name='apistar-peewee',
-    version='0.1.5',
+    version='0.2.0',
     url='https://github.com/aachurin/apistar_peewee',
     license='BSD',
     author='Andrey Churin',
     author_email='aachurin@gmail.com',
     description='Peewee integration for Apistar',
-    py_modules=['apistar_peewee'],
+    packages=['apistar_peewee'],
     zip_safe=False,
     platforms='any',
     install_requires=[
-        'peewee',
+        'peewee >= 3.0.10',
         'apistar'
     ],
     classifiers=[
