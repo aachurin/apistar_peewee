@@ -88,7 +88,7 @@ class Introspector(BaseIntrospector):
         elif isinstance(database, MySQLDatabase):
             metadata = MySQLMetadata(database)
         else:
-            raise NotImplementedError('Not yes implemented')
+            raise NotImplementedError('Not yet implemented')
         # else:
         #     metadata = SqliteMetadata(database)
         return cls(metadata, schema=schema)
