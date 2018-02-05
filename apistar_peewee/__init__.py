@@ -1,9 +1,9 @@
-from . commands import commands
+from . commands import commands # noqa
 from . components import PeeweeORM
-from . components import Session
-from . components import Database
-from . components import get_model_base
-from . components import components
+from . components import Session # noqa
+from . components import Database # noqa
+from . components import get_model_base # noqa
+from . components import components # noqa
 from apistar import exceptions as _exceptions
 
 
@@ -12,4 +12,3 @@ def apps_load_hook(app, module, **kwargs):
     if PeeweeORM.get_instance()._initialized:
         raise _exceptions.ConfigurationError("PeeweeORM initialized before application loading complete")
     PeeweeORM.get_instance()._modules.append(module)
-

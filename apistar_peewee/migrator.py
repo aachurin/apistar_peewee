@@ -1,12 +1,9 @@
 import os
 import re
-import sys
 import peewee
 import functools
 from datetime import datetime
-from apistar_peewee import PeeweeORM
 from collections import OrderedDict, namedtuple
-from playhouse import migrate as peewee_migrate
 
 
 INDENT = ' ' * 4
@@ -90,7 +87,7 @@ def field_to_code(field, modules=None):
     params = deconstruct_field(field, modules)
     field_class = type(field)
     param_str = ', '.join('%s=%s' % (k, (v.value if type(v) is Literal else repr(v)))
-                            for k, v in sorted(params.items()))
+                          for k, v in sorted(params.items()))
     result = '%s = %s(%s)' % (
         field.name,
         field_class.__module__ + '.' + field_class.__name__,
@@ -217,7 +214,7 @@ class Compiler:
             INDENT + "{meta}\n"
         )
         fields = [field_to_code(field, self.modules) for field in model._meta.sorted_fields
-                    if not (isinstance(field, peewee.AutoField) and field.name == 'id')]
+                  if not (isinstance(field, peewee.AutoField) and field.name == 'id')]
         meta = ['class Meta:', INDENT + 'table_name = "%s"' % model._meta.table_name]
         if model._meta.schema:
             meta.append(INDENT + 'schema = "%s"')
@@ -234,12 +231,7 @@ class Router:
 
     filemask = re.compile(r"[\d]{3}_[^\.]+\.py$")
 
-    def __init__(self,
-            database,
-            models,
-            migrate_table='migratehistory',
-            migrate_dir='migrations',
-            ):
+    def __init__(self, database, models, migrate_table='migratehistory', migrate_dir='migrations'):
         self.models = models
         self.database = database
         self.migrate_dir = migrate_dir
@@ -358,8 +350,10 @@ class Router:
     def run_forward(self, migration):
         migration_steps = []
         done, undone = self.done, self.undone
+
         def add_step(step):
             self.history_model.create(name=step)
+
         while 1:
             step = undone.pop(0)
             curr_snap = self.get_latest_snapshot(done)
@@ -378,8 +372,10 @@ class Router:
     def run_backward(self, migration):
         migration_steps = []
         done = self.done
+
         def drop_step(step):
             self.history_model.delete().where(self.history_model.name == step).execute()
+
         while done:
             step = done[-1]
             if migration == step:
@@ -504,7 +500,7 @@ class SchemaMigrator:
     def drop_column(self, model, field):
         ctx = self._alter_table(model)
         (ctx.literal(' DROP COLUMN ')
-           .sql(field))
+            .sql(field))
         self.add_op(ctx)
 
     def alter_column(self, model, field1, field2):
@@ -526,13 +522,14 @@ class SchemaMigrator:
         if callable(default):
             default = default()
         if default is not None:
-            self.add_op(model._schema._create_context()
-                .literal('UPDATE ')
+            ctx = model._schema._create_context()
+            (ctx.literal('UPDATE ')
                 .sql(model._meta.table)
                 .literal(' SET ')
                 .sql(peewee.Expression(field.column, peewee.OP.EQ, field.db_value(default), flat=True))
                 .literal(' WHERE ')
                 .sql(field.column.is_null()))
+            self.add_op(ctx)
 
     def add_not_null(self, model, field):
         self.apply_default(model, field)
@@ -679,8 +676,8 @@ class PostgresqlMigrator(SchemaMigrator, Migrator):
             self.add_op(ctx)
         if self._field_ddl(field1) != self._field_ddl(field2):
             ctx = self._alter_table(model)
-            (ctx.literal(' ALTER COLUMN ') \
-                .sql(field2) \
+            (ctx.literal(' ALTER COLUMN ')
+                .sql(field2)
                 .literal(' TYPE ')
                 .sql(field2.ddl_datatype(ctx)))
             self.add_op(ctx)
@@ -732,7 +729,7 @@ class MySQLMigrator(SchemaMigrator, Migrator):
 
     def alter_column(self, model, field1, field2):
         change_ddl = (field1.column_name != field2.column_name or
-                        self._field_ddl(field1) != self._field_ddl(field2))
+                      self._field_ddl(field1) != self._field_ddl(field2))
         if change_ddl:
             ctx = self._alter_table(model)
             (ctx.literal(' CHANGE ')
@@ -774,14 +771,15 @@ class MySQLMigrator(SchemaMigrator, Migrator):
         self.add_op(ctx)
 
     def get_foreign_key_name(self, model, field):
-        sql= """
-        SELECT constraint_name
-        FROM information_schema.key_column_usage
-        WHERE table_name = %s
-            AND column_name = %s
-            AND table_schema = DATABASE()
-            AND referenced_table_name = %s
-            AND referenced_column_name = %s"""
+        sql = """
+            SELECT constraint_name
+            FROM information_schema.key_column_usage
+            WHERE table_name = %s
+                AND column_name = %s
+                AND table_schema = DATABASE()
+                AND referenced_table_name = %s
+                AND referenced_column_name = %s
+        """
         cursor = self.database.execute_sql(sql, (
             model._meta.table_name,
             field.column_name,

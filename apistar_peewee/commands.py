@@ -1,6 +1,7 @@
+import os
 import sys
-from apistar import Command, exceptions
-from apistar.interfaces import Console, App
+from apistar import Command
+from apistar.interfaces import Console
 from . components import PeeweeORM
 
 
@@ -44,9 +45,9 @@ def get_models(models):
     for model in models.values():
         # special case for abstract models
         if (model.__name__.startswith('_') or
-            model.__name__.startswith('Abstract') or
-            getattr(model._meta, 'nonmigratable', False) or
-            getattr(model, '_nonmigratable_', False)):
+                model.__name__.startswith('Abstract') or
+                getattr(model._meta, 'nonmigratable', False) or
+                getattr(model, '_nonmigratable_', False)):
             continue
         result.append(model)
     return result

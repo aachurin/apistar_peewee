@@ -1,4 +1,3 @@
-import sys
 import contextlib
 import importlib
 import typing
@@ -60,7 +59,7 @@ class PeeweeORM:
 
     def __init__(self) -> None:
         self._initialized = False
-        self._modules = []
+        self._modules = []   # type: typing.List
         self.databases = {}  # type: typing.Dict[str, peewee.Database]
         self.models = {}  # type: typing.Dict[str, typing.Dict[str, peewee.Model]]
 
