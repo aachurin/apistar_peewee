@@ -168,6 +168,17 @@ $ apistar migrate
 [X] 001_migration_201802051935
 ```
 
+To rollback migrations:
+```
+$ apistar showmigrations --migration zero
+[X] 001_migration_201802051935:
+  SQL> DROP TABLE "model1"
+  Python> drop_step(step='001_migration_201802051935')
+
+$ apistar migrate --migration zero
+```
+
+
 To control where the migrations are created,
 you can specify `migrate_dir` and `migrate_table` settings (for each database).
 Default values are `migrations` and `migratehistory`.
