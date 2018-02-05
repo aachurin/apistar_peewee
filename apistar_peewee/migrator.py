@@ -419,8 +419,8 @@ class SchemaMigrator:
         elif isinstance(database, peewee.MySQLDatabase):
             return MySQLMigrator(database)
         else:
-            assert 0
-            return SqliteMigrator(database)
+            raise NotImplementedError('sqlite is not supported')
+            # return SqliteMigrator(database)
 
     def add_op(self, obj, *args, **kwargs):
         if isinstance(obj, list):
