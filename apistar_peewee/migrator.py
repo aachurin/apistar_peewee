@@ -392,7 +392,7 @@ class Router:
             backward(migrator)
             migrator.add_op(drop_step, step=step)
             migration_steps.append(migrator)
-            done.pop(0)
+            done.pop()
         return migration_steps
 
 
@@ -411,6 +411,7 @@ class SchemaMigrator:
     def __init__(self, database):
         self.database = database
         self.mops = []
+        self.hints = []
 
     @classmethod
     def from_database(cls, database):
@@ -448,9 +449,14 @@ class SchemaMigrator:
         ctx = field.model._schema._create_context()
         return ctx.sql(field.ddl_datatype(ctx)).query()[0]
 
+    def _is_index_for_foreign_key(self, index):
+        return len(index._expressions) == 1 and isinstance(index._expressions[0], peewee.ForeignKeyField)
+
     def get_indexes(self, model):
         result = {}
         for index in model._meta.fields_to_index():
+            if self._is_index_for_foreign_key(index):
+                continue
             ddl = model._schema._create_context().sql(index).query()[0]
             result[ddl] = index
         return result
@@ -460,7 +466,7 @@ class SchemaMigrator:
         for field in model._meta.sorted_fields:
             if isinstance(field, peewee.ForeignKeyField):
                 ddl = model._schema._create_context().sql(field.foreign_key_constraint()).query()[0]
-                result[ddl] = field
+                result[(ddl, field.unique)] = field
         return result
 
     def get_foreign_key_name(self, model, field):
@@ -506,9 +512,13 @@ class SchemaMigrator:
 
     def drop_foreign_key_constraint(self, model, field):
         name = self.get_foreign_key_name(model, field)
+        index = peewee.ModelIndex(model, (field,), unique=field.unique)
         self.add_op(self._alter_table(model).literal(self.DROP_FOREIGN_KEY).sql(peewee.Entity(name)))
+        self.drop_index(model, index)
 
     def add_foreign_key_constraint(self, model, field):
+        index = peewee.ModelIndex(model, (field,), unique=field.unique)
+        self.add_index(model, index)
         self.add_op(self._alter_table(model).literal(' ADD ').sql(field.foreign_key_constraint()))
 
     def apply_default(self, model, field):
@@ -558,6 +568,7 @@ class Migrator:
                 else:
                     op.fn(*op.args, **op.kwargs)
         self.mops = []
+        self.hints = []
 
     def get_op_descr(self, obj):
         if isinstance(obj, peewee.Context):
@@ -586,13 +597,13 @@ class Migrator:
         models1 = OrderedDict([(m._meta.name, m) for m in models1])
         models2 = OrderedDict([(m._meta.name, m) for m in models2])
 
-        for name in models1:
-            if name in models2:
-                self.migrate_model(models1[name], models2[name])
-
         # Add models
         for name in [m for m in models2 if m not in models1]:
             self.create_table(models2[name])
+
+        for name in models1:
+            if name in models2:
+                self.migrate_model(models1[name], models2[name])
 
         # Remove models
         for name in [m for m in models1 if m not in models2]:

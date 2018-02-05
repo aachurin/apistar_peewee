@@ -137,6 +137,8 @@ Before starting your app you will likely need to create the database tables whic
 $ apistar createtables
 ```
 
+Or use migrations.
+
 For all commands you can specify database using `--database` argument. By default, it's `default`.
 
 
@@ -145,39 +147,57 @@ For all commands you can specify database using `--database` argument. By defaul
 Create new migration:
 ```bash
 $ apistar makemigrations
-Migration `001_migration_201802051935` has been created.
+Migration `002_migration_201802052205` has been created.
 ```
 
 List migrations:
 ```bash
 $ apistar listmigrations
-[ ] 001_migration_201802051935
+[X] 001_migration_201802052204
+[ ] 002_migration_201802052205
 ```
 
 Show migration operations:
 ```bash
 $ apistar showmigrations
-[ ] 001_migration_201802051935:
-  SQL> CREATE TABLE "model1" ("id" SERIAL NOT NULL PRIMARY KEY, "test1" VARCHAR(100) NOT NULL) 
-  Python> add_step(step='001_migration_201802051935')
+[ ] 002_migration_201802052205:
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "text" TYPE VARCHAR(50)
+  SQL> ALTER TABLE "tweet" ADD COLUMN "rating" INTEGER
+  SQL> UPDATE "tweet" SET "rating" = %s WHERE ("rating" IS %s) [0, None]
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "rating" SET NOT NULL
+  Python> add_step(step='002_migration_201802052205')
 ```
 
 Run migrations:
 ```bash
 $ apistar migrate
-[X] 001_migration_201802051935
+[X] 002_migration_201802052205
+
+$ apistar listmigrations
+[X] 001_migration_201802052204
+[X] 002_migration_201802052205
 ```
 
-To rollback migrations:
+Rollback migrations:
 ```
-$ apistar showmigrations --migration zero
-[X] 001_migration_201802051935:
-  SQL> DROP TABLE "model1"
-  Python> drop_step(step='001_migration_201802051935')
+$ apistar showmigrations --migration 001
+[X] 002_migration_201802052205:
+  SQL> ALTER TABLE "tweet" DROP COLUMN "rating"
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "text" TYPE VARCHAR(100)
+  Python> drop_step(step='002_migration_201802052205')
 
-$ apistar migrate --migration zero
+$ apistar migrate --migration 001
+[ ] 002_migration_201802052205
+
+$ apistar listmigrations
+[X] 001_migration_201802052204
+[ ] 002_migration_20180205220
+
+$ apistar showmigrations --migrate zero
+[X] 001_migration_201802052204:
+  SQL> DROP TABLE "tweet"
+  Python> drop_step(step='001_migration_201802052204')
 ```
-
 
 To control where the migrations are created,
 you can specify `migrate_dir` and `migrate_table` settings (for each database).
@@ -232,4 +252,4 @@ def create_another_customers(db: Database['another_db'], name: str):
 ```
 
 
-- For a working minimal example see [/examples/app.py](https://github.com/aachurin/apistar_peewee/blob/master/examples/app.py).
+For a working minimal example see [/examples/app.py](https://github.com/aachurin/apistar_peewee/blob/master/examples/app.py).
