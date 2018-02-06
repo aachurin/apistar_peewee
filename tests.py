@@ -2,7 +2,7 @@ import os
 import datetime
 import unittest
 from peewee import *
-from apistar_peewee.migrator import SchemaMigrator, Snapshot, field_to_code
+from apistar_peewee.migrator import SchemaMigrator, Snapshot, Column
 from playhouse.reflection import Introspector as BaseIntrospector
 from playhouse.reflection import Metadata as BaseMetadata
 from playhouse.reflection import PostgresqlMetadata as BasePostgresqlMetadata
@@ -155,9 +155,10 @@ class MigrationTestCase(unittest.TestCase):
         indexes1 = sorted([(tuple(names), unique) for names, unique in model1._meta.indexes])
         indexes2 = sorted([(tuple(names), unique) for names, unique in model2._meta.indexes])
         self.assertEqual(indexes1, indexes2)
-        fields1 = {k: field_to_code(v) for k, v in model1._meta.fields.items()}
-        fields2 = {k: field_to_code(v) for k, v in model2._meta.fields.items()}
-        self.assertEqual(fields1, fields2)
+        exclude = ['backref', 'default', 'on_delete', 'on_update']
+        fields1 = {k: (type(v), Column(v).to_params(exclude)) for k, v in model1._meta.fields.items()}
+        fields2 = {k: (type(v), Column(v).to_params(exclude)) for k, v in model2._meta.fields.items()}
+        self.assertDictEqual(fields1, fields2)
 
 
 class SchemaMigrationTests(MigrationTestCase):
@@ -196,7 +197,6 @@ class SchemaMigrationTests(MigrationTestCase):
             test2 = CharField(max_length=200, unique=True, default='')
 
         self.run_migration('test_add_field_add_index')
-        Model1.test2.default = None
         self.assertModelsEqual(Model1, self.get_models()['model1'])
 
     def test_indexes(self):
@@ -262,7 +262,6 @@ class SchemaMigrationTests(MigrationTestCase):
         self.assertEqual(data[0].test1, 'test1')
         self.assertEqual(data[1].test1, 'test2')
 
-        Model1.test1.default = None
         self.assertModelsEqual(Model1, self.get_models()['model1'])
 
     def test_alter_type(self):
@@ -371,7 +370,6 @@ class SchemaMigrationTests(MigrationTestCase):
             test1 = ForeignKeyField(Model1, on_delete='CASCADE')
 
         self.run_migration('test_alter_foreign_key2')
-        Model2.test1.on_delete = None
         self.assertModelsEqual(Model2, self.get_models()['model2'])
 
     def test_alter_foreign_key_index(self):
@@ -397,6 +395,97 @@ class SchemaMigrationTests(MigrationTestCase):
 
         self.run_migration('test_alter_foreign_key_index')
         self.assertModelsEqual(Model2, self.get_models()['model2'])
+
+    def test_add_primary_key(self):
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+            class Meta:
+                primary_key = False
+
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+
+        self.run_migration('test_add_primary_key')
+        self.assertModelsEqual(Model1, self.get_models()['model1'])
+
+    def test_add_compisite_primary_key(self):
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+            test2 = CharField(max_length=10)
+            class Meta:
+                primary_key = False
+
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+            test2 = CharField(max_length=10)
+            class Meta:
+                primary_key = CompositeKey('test1', 'test2')
+
+        # Just test it works, reflection adds index for primary key
+        self.run_migration('test_add_compisite_primary_key')
+
+    def test_drop_primary_key(self):
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+            class Meta:
+                primary_key = False
+
+        # Just test it works, reflection adds primary key to model,
+        # even if there is no primary key
+        self.run_migration('test_drop_primary_key')
+
+    def test_change_primary_key_to_default(self):
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10, primary_key=True)
+
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+
+        self.run_migration('test_change_primary_key_to_default')
+        self.assertModelsEqual(Model1, self.get_models()['model1'])
+
+    def test_change_primary_key_to_custom(self):
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10)
+
+        snapshot = self.get_snapshot()
+
+        @snapshot.append
+        class Model1(TestModel):
+            test1 = CharField(max_length=10, primary_key=True)
+
+        self.run_migration('test_change_primary_key_to_custom')
+        self.assertModelsEqual(Model1, self.get_models()['model1'])
 
     def test_data_migration(self):
         snapshot = self.get_snapshot()
@@ -439,8 +528,6 @@ class SchemaMigrationTests(MigrationTestCase):
 
         values = [m.test1 for m in Model1.select().order_by(Model1.test1)]
         self.assertEqual(values, [1, 2])
-
-        Model1.test1.default = None
         self.assertModelsEqual(Model1, self.get_models()['model1'])
 
 

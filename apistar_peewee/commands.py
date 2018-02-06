@@ -67,10 +67,14 @@ def droptables(orm: PeeweeORM, database: str='default'):
 
 def makemigrations(console: Console, orm: PeeweeORM, name: str='', database: str='default'):
     """Create migration"""
-    from . migrator import Router
+    from . migrator import Router, MigrationError
     c = Colorizer()
     router = Router(database=orm.get_database(database), models=get_models(orm.get_models(database)))
-    result = router.create()
+    try:
+        result = router.create()
+    except MigrationError as e:
+        console.echo(c.colored('Migration error: ' + str(e), 'red'))
+        return
     if not result:
         console.echo(c.colored('No changes found.', 'green'))
     else:
@@ -79,13 +83,13 @@ def makemigrations(console: Console, orm: PeeweeORM, name: str='', database: str
 
 def migrate(console: Console, orm: PeeweeORM, migration: str='', database: str='default'):
     """Run migrations"""
-    from . migrator import Router
+    from . migrator import Router, MigrationError
     c = Colorizer()
     router = Router(database=orm.get_database(database), models=get_models(orm.get_models(database)))
     try:
         forward, steps = router.migrate(migration)
-    except KeyError as e:
-        console.echo(c.colored('; '.join(e.args), 'red'))
+    except MigrationError as e:
+        console.echo(c.colored('Migration error: ' + str(e), 'red'))
         return
     if not steps:
         console.echo(c.colored('There is nothing to migrate', 'yellow'))
@@ -112,13 +116,13 @@ def listmigrations(console: Console, orm: PeeweeORM, database: str='default'):
 
 def showmigrations(console: Console, orm: PeeweeORM, migration: str='', database: str='default'):
     """Show migrations instructions"""
-    from . migrator import Router
+    from . migrator import Router, MigrationError
     c = Colorizer()
     router = Router(database=orm.get_database(database), models=get_models(orm.get_models(database)))
     try:
         forward, steps = router.migrate(migration)
-    except KeyError as e:
-        console.echo(c.colored('; '.join(e.args), 'red'))
+    except MigrationError as e:
+        console.echo(c.colored('Migration error: ' + str(e), 'red'))
         return
     if not steps:
         console.echo(c.colored('There is nothing to migrate', 'yellow'))

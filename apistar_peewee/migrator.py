@@ -6,11 +6,13 @@ from datetime import datetime
 from collections import OrderedDict, namedtuple
 
 
+__all__ = ('Router', 'Snapshot', 'SchemaMigrator', 'deconstructor')
+
+
 INDENT = ' ' * 4
 NEWLINE = '\n'
-MIGRATE_TEMPLATE = """
+MIGRATE_TEMPLATE = """# auto-generated snapshot
 {imports}
-
 
 snapshot = Snapshot()
 
@@ -24,97 +26,119 @@ def backward(migrator, **kwargs):
     migrator.migrate()
 """
 
-_DECONSTRUCTORS = {}
-_DEFAULT_CALLABLES = {
-    datetime.now: ('datetime', 'datetime.now'),
-}
+
+class MigrationError(Exception):
+    pass
 
 
 Literal = namedtuple('Literal', ['value'])
 
 
-def deconstruct_field(field, modules=None):
-    if modules is None:
-        modules = set()
-
-    params = {}
-    field_class = type(field)
-
-    default_args = (
-        ('null', False),
-        ('index', False),
-        ('unique', False),
-        ('primary_key', False),
-        ('constraints', None),
-        ('sequence', None),
-        ('collation', None),
-        ('unindexed', False),
-    )
-
-    for attr, value in default_args:
-        if getattr(field, attr) != value:
-            params[attr] = getattr(field, attr)
-
-    if field.column_name != field.name:
-        params['column_name'] = field.column_name
-
-    # Handle extra attributes
-    if hasattr(field, 'deconstruct'):
-        field.deconstruct(params)
-    else:
-        for cls in field_class.__mro__:
-            if cls in _DECONSTRUCTORS:
-                _DECONSTRUCTORS[cls](field, params)
-                break
-
-    # Handle default value.
-    if field.default is not None:
-        if callable(field.default):
-            if field.default in _DEFAULT_CALLABLES:
-                path = _DEFAULT_CALLABLES[field.default]
-            else:
-                path = field.default.__module__, field.default.__name__
-            modules.add(path[0])
-            params['default'] = Literal('%s.%s' % path)
-        else:
-            params['default'] = field.default
-
-    modules.add(field_class.__module__)
-    return params
-
-
-def field_to_code(field, modules=None):
-    params = deconstruct_field(field, modules)
-    field_class = type(field)
-    param_str = ', '.join('%s=%s' % (k, (v.value if type(v) is Literal else repr(v)))
-                          for k, v in sorted(params.items()))
-    result = '%s = %s(%s)' % (
-        field.name,
-        field_class.__module__ + '.' + field_class.__name__,
-        param_str)
-    return result
-
-
 def deconstructor(field_class):
     def decorator(fn):
-        _DECONSTRUCTORS[field_class] = fn
+        Column._deconstructors[field_class] = fn
         return fn
     return decorator
 
 
+class Column:
+
+    __slots__ = ('modules', 'field_class', 'name', '__dict__')
+
+    _default_callables = {
+        datetime.now: ('datetime', 'datetime.now'),
+    }
+    _deconstructors = {}
+
+    def __init__(self, field, complete=False):
+        self.modules = set()
+        self.field_class = type(field)
+        self.name = field.name
+        self.__dict__ = self._deconstruct_field(field, complete)
+
+    def __eq__(self, other):
+        return (
+            self.__class__ is other.__class__ and
+            self.field_class is other.field_class and
+            self.__dict__ == other.__dict__
+            )
+
+    def to_code(self):
+        params = self.__dict__
+        param_str = ', '.join('%s=%s' % (k, (v.value if type(v) is Literal else repr(v)))
+                              for k, v in sorted(params.items()))
+        result = '%s = %s(%s)' % (
+            self.name,
+            self.field_class.__module__ + '.' + self.field_class.__name__,
+            param_str)
+        return result
+
+    def to_params(self, exclude=()):
+        params = dict(self.__dict__)
+        if exclude:
+            for key in exclude:
+                params.pop(key, None)
+        return params
+
+    def _deconstruct_field(self, field, complete):
+        default_args = (
+            ('null', False),
+            ('index', False),
+            ('unique', False),
+            ('primary_key', False),
+            ('constraints', None),
+            ('sequence', None),
+            ('collation', None),
+            ('unindexed', False),
+        )
+
+        params = {}
+
+        for attr, value in default_args:
+            if complete or getattr(field, attr) != value:
+                params[attr] = getattr(field, attr)
+
+        if complete or field.column_name != field.name:
+            params['column_name'] = field.column_name
+
+        # Handle extra attributes
+        if hasattr(field, 'deconstruct'):
+            field.deconstruct(params)
+        else:
+            for cls in type(field).__mro__:
+                if cls in self._deconstructors:
+                    self._deconstructors[cls](field, params, complete=complete)
+                    break
+
+        # Handle default value.
+        if field.default is not None:
+            if callable(field.default):
+                if field.default in self._default_callables:
+                    path = self._default_callables[field.default]
+                else:
+                    path = field.default.__module__, field.default.__name__
+                self.modules.add(path[0])
+                params['default'] = Literal('%s.%s' % path)
+            else:
+                params['default'] = field.default
+
+        self.modules.add(type(field).__module__)
+        return params
+
+
 @deconstructor(peewee.DateTimeField)
-def datetimefield_deconstructor(field, params):
+def datetimefield_deconstructor(field, params, **kwargs):
     if not isinstance(field.formats, list):
         params['formats'] = field.formats
 
 
 @deconstructor(peewee.CharField)
-def charfield_deconstructor(field, params):
+def charfield_deconstructor(field, params, **kwargs):
     params['max_length'] = field.max_length
 
 
 @deconstructor(peewee.DecimalField)
-def decimalfield_deconstructor(field, params):
+def decimalfield_deconstructor(field, params, **kwargs):
     params['max_digits'] = field.max_digits
     params['decimal_places'] = field.decimal_places
     params['auto_round'] = field.auto_round
@@ -122,23 +146,23 @@ def decimalfield_deconstructor(field, params):
 
 
 @deconstructor(peewee.ForeignKeyField)
-def deconstruct_foreignkey(field, params):
+def deconstruct_foreignkey(field, params, complete):
     default_column_name = field.name
     if not default_column_name.endswith('_id'):
         default_column_name += '_id'
-    if default_column_name != field.column_name:
+    if complete or default_column_name != field.column_name:
         params['column_name'] = field.column_name
     else:
         params.pop('column_name', None)
-    if field.rel_field is not field.rel_model._meta.primary_key:
+    if complete or field.rel_field is not field.rel_model._meta.primary_key:
         params['field'] = field.rel_field.name
-    # if field.backref and field.backref != field.model._meta.name + '_set':
-    #     params['backref'] = field.backref
-    # default_object_id_name = field.column_name
-    # if default_object_id_name == field.name:
-    #     default_object_id_name += '_id'
-    # if default_object_id_name != field.object_id_name:
-    #     params['object_id_name'] = field.object_id_name
+    if complete or (field.backref and field.backref != field.model._meta.name + '_set'):
+        params['backref'] = field.backref
+    default_object_id_name = field.column_name
+    if default_object_id_name == field.name:
+        default_object_id_name += '_id'
+    if complete or default_object_id_name != field.object_id_name:
+        params['object_id_name'] = field.object_id_name
     if field.on_delete:
         params['on_delete'] = field.on_delete
     if field.on_update:
@@ -213,16 +237,32 @@ class Compiler:
             INDENT + "{fields}\n" +
             INDENT + "{meta}\n"
         )
-        fields = [field_to_code(field, self.modules) for field in model._meta.sorted_fields
-                  if not (isinstance(field, peewee.AutoField) and field.name == 'id')]
+
+        field_code = []
+        for field in model._meta.sorted_fields:
+            if isinstance(field, peewee.AutoField) and field.name == 'id':
+                continue
+            column = Column(field)
+            field_code.append(column.to_code())
+            self.modules.update(column.modules)
+
         meta = ['class Meta:', INDENT + 'table_name = "%s"' % model._meta.table_name]
+
         if model._meta.schema:
             meta.append(INDENT + 'schema = "%s"')
-        # if isinstance(model._meta.primary_key, peewee.CompositeKey):
-        #     meta.append(INDENT + 'primary_key = peewee.CompositeKey{0}'.format(model._meta.primary_key.field_names))
+
+        if model._meta.indexes:
+            meta.append(INDENT + 'indexes = %r' % (tuple(model._meta.indexes),))
+
+        if model._meta.primary_key is not None:
+            if isinstance(model._meta.primary_key, peewee.CompositeKey):
+                names = ', '.join(repr(x) for x in model._meta.primary_key.field_names)
+                meta.append(INDENT + 'primary_key = peewee.CompositeKey(%s)' % names)
+            elif model._meta.primary_key is False:
+                meta.append(INDENT + 'primary_key = False')
         return template.format(
             classname=model.__name__,
-            fields=('\n' + INDENT).join(fields),
+            fields=('\n' + INDENT).join(field_code),
             meta=('\n' + INDENT).join(meta)
         )
 
@@ -339,7 +379,7 @@ class Router:
             migration = migration or self.todo[-1]
 
             if migration not in self.todo:
-                raise KeyError('Unknown migration `%s`' % migration)
+                raise MigrationError('unknown migration `%s`' % migration)
 
             forward = migration not in self.done
         return forward, self.run_forward(migration) if forward else self.run_backward(migration)
@@ -407,7 +447,6 @@ class SchemaMigrator:
     def __init__(self, database):
         self.database = database
         self.mops = []
-        self.hints = []
 
     @classmethod
     def from_database(cls, database):
@@ -448,6 +487,13 @@ class SchemaMigrator:
     def _is_index_for_foreign_key(self, index):
         return len(index._expressions) == 1 and isinstance(index._expressions[0], peewee.ForeignKeyField)
 
+    def get_primary_key_columns(self, model):
+        fields = model._meta.get_primary_keys()
+        try:
+            return tuple(f.column_name for f in fields)
+        except AttributeError:
+            return ()
+
     def get_indexes(self, model):
         result = {}
         for index in model._meta.fields_to_index():
@@ -486,6 +532,7 @@ class SchemaMigrator:
         self.add_op(model._schema._drop_index(index, safe=False))
 
     def add_column(self, model, field):
+        field.model = model
         ctx = self._alter_table(model)
         (ctx.literal(' ADD COLUMN ')
             .sql(field)
@@ -493,11 +540,10 @@ class SchemaMigrator:
             .sql(field.ddl_datatype(ctx)))
         self.add_op(ctx)
         if not field.null:
-            if field.default is None:
-                raise ValueError('%s.%s is not null but has no default' % (model._meta.name, field.name))
             self.add_not_null(model, field)
 
     def drop_column(self, model, field):
+        field.model = model
         ctx = self._alter_table(model)
         (ctx.literal(' DROP COLUMN ')
             .sql(field))
@@ -506,36 +552,59 @@ class SchemaMigrator:
     def alter_column(self, model, field1, field2):
         raise NotImplementedError
 
+    get_primary_key_name = None
+
+    def get_primary_key_field(self, field):
+        return field
+
+    def drop_primary_key_constraint(self, model):
+        ctx = self._alter_table(model).literal(self.DROP_PRIMARY_KEY)
+        if self.get_primary_key_name:
+            ctx.sql(peewee.Entity(self.get_primary_key_name(model)))
+        self.add_op(ctx)
+
+    def add_primary_key_constraint(self, model):
+        pk_columns = [f.column for f in model._meta.get_primary_keys()]
+        ctx = self._alter_table(model).literal(' ADD PRIMARY KEY ')
+        ctx.sql(peewee.EnclosedNodeList(pk_columns))
+        self.add_op(ctx)
+
     def drop_foreign_key_constraint(self, model, field):
+        field.model = model
         name = self.get_foreign_key_name(model, field)
         index = peewee.ModelIndex(model, (field,), unique=field.unique)
         self.add_op(self._alter_table(model).literal(self.DROP_FOREIGN_KEY).sql(peewee.Entity(name)))
         self.drop_index(model, index)
 
     def add_foreign_key_constraint(self, model, field):
+        field.model = model
         index = peewee.ModelIndex(model, (field,), unique=field.unique)
         self.add_index(model, index)
         self.add_op(self._alter_table(model).literal(' ADD ').sql(field.foreign_key_constraint()))
 
     def apply_default(self, model, field):
+        field.model = model
         default = field.default
         if callable(default):
             default = default()
-        if default is not None:
-            ctx = model._schema._create_context()
-            (ctx.literal('UPDATE ')
-                .sql(model._meta.table)
-                .literal(' SET ')
-                .sql(peewee.Expression(field.column, peewee.OP.EQ, field.db_value(default), flat=True))
-                .literal(' WHERE ')
-                .sql(field.column.is_null()))
-            self.add_op(ctx)
+        # if default is None:
+        #     raise MigrationError("%s.%s is not null but has no default" % (model._meta.table_name, field.column_name))
+        ctx = model._schema._create_context()
+        (ctx.literal('UPDATE ')
+            .sql(model._meta.table)
+            .literal(' SET ')
+            .sql(peewee.Expression(field.column, peewee.OP.EQ, field.db_value(default), flat=True))
+            .literal(' WHERE ')
+            .sql(field.column.is_null()))
+        self.add_op(ctx)
 
     def add_not_null(self, model, field):
+        field.model = model
         self.apply_default(model, field)
         self.add_op(self._add_not_null(model, field))
 
     def drop_not_null(self, model, field):
+        field.model = model
         self.add_op(self._drop_not_null(model, field))
 
     def _add_not_null(self, model, field):
@@ -565,7 +634,6 @@ class Migrator:
                 else:
                     op.fn(*op.args, **op.kwargs)
         self.mops = []
-        self.hints = []
 
     def get_op_descr(self, obj):
         if isinstance(obj, peewee.Context):
@@ -611,6 +679,9 @@ class Migrator:
     def migrate_model(self, model1, model2):
         """Find difference between Peewee models."""
 
+        pk_columns1 = self.get_primary_key_columns(model1)
+        pk_columns2 = self.get_primary_key_columns(model2)
+
         indexes1 = self.get_indexes(model1)
         indexes2 = self.get_indexes(model2)
 
@@ -636,6 +707,9 @@ class Migrator:
             else:
                 alter_fields.append((field1, field2))
 
+        if pk_columns1 and pk_columns1 != pk_columns2:
+            self.drop_primary_key_constraint(model1)
+
         for field in drop_constraints:
             self.drop_foreign_key_constraint(model1, field)
 
@@ -649,6 +723,8 @@ class Migrator:
             self.alter_column(model2, field1, field2)
 
         for field in add_fields:
+            if field is model2._meta.primary_key:
+                field = self.get_primary_key_field(field)
             self.add_column(model2, field)
 
         for index in add_indexes:
@@ -656,6 +732,9 @@ class Migrator:
 
         for field in add_constraints:
             self.add_foreign_key_constraint(model2, field)
+
+        if pk_columns2 and pk_columns2 != pk_columns1:
+            self.add_primary_key_constraint(model2)
 
     def python(self, func, *args, **kwargs):
         """Run python code."""
@@ -665,8 +744,11 @@ class Migrator:
 class PostgresqlMigrator(SchemaMigrator, Migrator):
 
     DROP_FOREIGN_KEY = ' DROP CONSTRAINT '
+    DROP_PRIMARY_KEY = ' DROP CONSTRAINT '
 
     def alter_column(self, model, field1, field2):
+        field1.model = model
+        field2.model = model
         if field1.column_name != field2.column_name:
             ctx = self._alter_table(model)
             (ctx.literal(' RENAME COLUMN ')
@@ -692,6 +774,23 @@ class PostgresqlMigrator(SchemaMigrator, Migrator):
 
     def _drop_not_null(self, model, field):
         return self._alter_table(model).literal(' ALTER COLUMN ').sql(field).literal(' DROP NOT NULL')
+
+    def get_primary_key_name(self, model):
+        sql = """
+            SELECT DISTINCT tc.constraint_name
+            FROM information_schema.table_constraints AS tc
+            WHERE tc.constraint_type = 'PRIMARY KEY' AND
+                  tc.table_name = %s AND
+                  tc.table_schema = %s
+            """
+        cursor = self.database.execute_sql(sql, (
+            model._meta.table_name,
+            model._meta.schema or 'public'
+            ))
+        result = cursor.fetchall()
+        if result:
+            return result[0][0]
+        return '<PRIMARY KEY>'
 
     def get_foreign_key_name(self, model, field):
         sql = """
@@ -720,14 +819,29 @@ class PostgresqlMigrator(SchemaMigrator, Migrator):
             field.column_name,
             field.rel_field.column_name
             ))
-        return cursor.fetchall()[0][0]
+        result = cursor.fetchall()
+        if len(result) > 1:
+            raise MigrationError("Foreign key was created outside migrations")
+        if result:
+            return result[0][0]
+        return '<FOREIGN KEY(%s)>' % field.column_name
 
 
 class MySQLMigrator(SchemaMigrator, Migrator):
 
     DROP_FOREIGN_KEY = ' DROP FOREIGN KEY '
+    DROP_PRIMARY_KEY = ' DROP PRIMARY KEY '
+
+    def get_primary_key_field(self, field):
+        if isinstance(field, peewee.AutoField):
+            params = Column(field, complete=True).to_params()
+            result = peewee.IntegerField(**params)
+            return result
+        return field
 
     def alter_column(self, model, field1, field2):
+        field1.model = model
+        field2.model = model
         change_ddl = (field1.column_name != field2.column_name or
                       self._field_ddl(field1) != self._field_ddl(field2))
         if change_ddl:
@@ -770,6 +884,17 @@ class MySQLMigrator(SchemaMigrator, Migrator):
         ctx.sql(model._meta.table)
         self.add_op(ctx)
 
+    def drop_primary_key_constraint(self, model):
+        pk = model._meta.primary_key
+        if isinstance(pk, peewee.AutoField):
+            ctx = self._alter_table(model)
+            (ctx.literal(' MODIFY ')
+                .sql(pk)
+                .literal(' ')
+                .sql(peewee.IntegerField().ddl_datatype(ctx)))
+            self.add_op(ctx)
+        super().drop_primary_key_constraint(model)
+
     def get_foreign_key_name(self, model, field):
         sql = """
             SELECT constraint_name
@@ -786,4 +911,9 @@ class MySQLMigrator(SchemaMigrator, Migrator):
             field.rel_model._meta.table_name,
             field.rel_field.column_name
             ))
-        return cursor.fetchall()[0][0]
+        result = cursor.fetchall()
+        if len(result) > 1:
+            raise MigrationError("Foreign key was created outside migrations")
+        if result:
+            return result[0][0]
+        return '<FOREIGN KEY(%s)>' % field.column_name
