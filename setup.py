@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
     name='apistar-peewee',
-    version='0.2.0',
+    version='0.2.1',
     url='https://github.com/aachurin/apistar_peewee',
     license='BSD',
     author='Andrey Churin',
