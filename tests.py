@@ -527,6 +527,7 @@ class SchemaMigrationTests(MigrationTestCase):
         self.run_migrator(migrator)
 
         values = [m.test1 for m in Model1.select().order_by(Model1.test1)]
+
         self.assertEqual(values, [1, 2])
         self.assertModelsEqual(Model1, self.get_models()['model1'])
 

@@ -175,5 +175,5 @@ def get_database(orm: PeeweeORM, cls: ParamAnnotation) -> peewee.Database:
 components = [
     Component(PeeweeORM, init=init_orm),
     Component(Session, init=get_session, preload=False),
-    Component(Database, init=get_database, preload=False),
+    Component(Database, init=get_database, preload=False)
 ]

@@ -1,5 +1,5 @@
 from . commands import commands # noqa
-from . components import PeeweeORM
+from . components import PeeweeORM # noqa
 from . components import Session # noqa
 from . components import Database # noqa
 from . components import get_model_base # noqa

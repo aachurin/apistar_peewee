@@ -48,6 +48,7 @@ class Column:
     _default_callables = {
         datetime.now: ('datetime', 'datetime.now'),
     }
+
     _deconstructors = {}
 
     def __init__(self, field, complete=False):

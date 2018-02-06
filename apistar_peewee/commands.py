@@ -17,7 +17,7 @@ class Colorizer:
     def __init__(self):
         self.supports_color = self.supports_color()
 
-    def supports_color(self):
+    def supports_color(self): # noqa
         """
         Return True if the running system's terminal supports color,
         and False otherwise.
