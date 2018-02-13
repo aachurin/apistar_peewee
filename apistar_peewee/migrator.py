@@ -3,7 +3,7 @@ import re
 import peewee
 import textwrap
 from datetime import datetime
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict
 
 
 __all__ = ('Router', 'Snapshot', 'Migrator', 'deconstructor')
@@ -21,6 +21,7 @@ snapshot = Snapshot()
 {snapshot}
 
 """
+
 
 class MigrationError(Exception):
     pass
@@ -447,7 +448,7 @@ class FileStorage(Storage):
 
     def clear(self):
         super().clear()
-        for step in self.todo:
+        for name in self.todo:
             os.remove(os.path.join(self.migrate_dir, name + '.py'))
 
 
@@ -604,7 +605,7 @@ class MigrateCode:
 class Migrator:
     """Provide migrations."""
 
-    hint_builders = []
+    hint_builders = []  # type: list
     add_hint = hint_builders.append
     forward_hints = ''
     backward_hints = ''
@@ -829,7 +830,7 @@ class CharFieldToCharField(Hint):
 
     def test(self):
         return (isinstance(self.old_field, peewee.CharField) and
-                    isinstance(self.new_field, peewee.CharField))
+                isinstance(self.new_field, peewee.CharField))
 
     def exec(self, code):
         super().exec(code)
@@ -1112,6 +1113,9 @@ class Operations:
         raise NotImplementedError
 
     def _add_not_null(self, model, field):
+        raise NotImplementedError
+
+    def _drop_not_null(self, model, field):
         raise NotImplementedError
 
 
