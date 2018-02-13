@@ -2,7 +2,7 @@ import os
 import datetime
 import unittest
 from peewee import *
-from apistar_peewee.migrator import SchemaMigrator, Snapshot, Column
+from apistar_peewee.migrator import Migrator, Column, Router, MemoryStorage, MigrationError
 from playhouse.reflection import Introspector as BaseIntrospector
 from playhouse.reflection import Metadata as BaseMetadata
 from playhouse.reflection import PostgresqlMetadata as BasePostgresqlMetadata
@@ -107,45 +107,33 @@ class MigrationTestCase(unittest.TestCase):
         if not self.database.is_closed():
             self.database.close()
         self.database.connect()
-        self.snapshots = []
-        self.all_snapshots = []
-        self.get_snapshot()
         self.introspector = Introspector.from_database(self.database)
+        self.router = Router(self.database, storage_class=MemoryStorage)
+        self.cleanup = []
         super().setUp()
 
     def tearDown(self):
         super().tearDown()
-        for snapshot in self.all_snapshots:
-            self.database.drop_tables(list(snapshot))
+        self.database.drop_tables(self.cleanup, safe=True)
+        self.router.clear()
         self.database.close()
 
-    def get_snapshot(self):
-        snapshot = Snapshot(self.database)
-        self.snapshots.append(snapshot)
-        self.all_snapshots.append(snapshot)
-        return snapshot
+    def add_cleanup(self, cls):
+        self.cleanup.append(cls)
+        return cls
 
-    def get_migrator(self, name):
-        migrator = SchemaMigrator.from_database(self.database)
-        snapshot1 = self.snapshots.pop(0)
-        migrator.setup(name, snapshot1, self.snapshots[0])
-        return migrator
+    def makemigrations(self, models):
+        self.router.create(models=models)
 
-    def run_migrator(self, migrator):
+    def migrate(self):
+        steps = self.router.migrate()
         if PRINT_DEBUG:
-            print(migrator.name)
-            for op in migrator.get_ops():
-                print(op)
-        migrator.run()
-
-    def run_migration(self, name):
-        assert len(self.snapshots) > 1
-        for n in range(0, len(self.snapshots) - 1):
-            migrator = self.get_migrator('%s %d' % (name, n + 1))
-            migrator.migrate()
-            self.run_migrator(migrator)
-        if PRINT_DEBUG:
-            print()
+            for step in steps:
+                print(step.name)
+                for op, color in step.get_ops():
+                    print(op.description)
+                print()
+        [step.run() for step in steps]
 
     def get_models(self):
         return self.introspector.generate_models()
@@ -158,379 +146,473 @@ class MigrationTestCase(unittest.TestCase):
         exclude = ['backref', 'default', 'on_delete', 'on_update']
         fields1 = {k: (type(v), Column(v).to_params(exclude)) for k, v in model1._meta.fields.items()}
         fields2 = {k: (type(v), Column(v).to_params(exclude)) for k, v in model2._meta.fields.items()}
+        if PRINT_DEBUG:
+            print('assertModelsEqual:')
+            print(fields1)
+            print(fields2)
         self.assertDictEqual(fields1, fields2)
 
 
-class SchemaMigrationTests(MigrationTestCase):
+class MigrationTests(MigrationTestCase):
 
     def test_add_model(self):
-        snapshot = self.get_snapshot()
-        @snapshot.append
-        class Model1(TestModel):
-            test = CharField(max_length=100, unique=True)
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100, unique=True)
 
-        self.run_migration('test_add_model')
+        self.makemigrations([A])
+        self.migrate()
 
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+        self.assertModelsEqual(A, self.get_models()['a'])
 
     def test_drop_model(self):
-        snapshot = self.get_snapshot()
-        @snapshot.append
-        class Model1(TestModel):
-            test = CharField(max_length=100, unique=True)
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100, unique=True)
 
-        self.get_snapshot()
-        self.run_migration('test_drop_model')
+        self.makemigrations([A])
+        self.makemigrations([])
+        self.migrate()
 
-        self.assertFalse('model1' in self.get_models())
+        self.assertFalse('a' in self.get_models())
 
-    def test_add_field_add_index(self):
-        snapshot = self.get_snapshot()
+    def test_add_index(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=100)
+        self.makemigrations([A])
 
-        snapshot = self.get_snapshot()
-        @snapshot.append
-        class Model1(TestModel):
-            test2 = CharField(max_length=200, unique=True, default='')
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100, unique=True)
 
-        self.run_migration('test_add_field_add_index')
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+        self.makemigrations([A])
+        self.migrate()
 
-    def test_indexes(self):
-        snapshot = self.get_snapshot()
+        self.assertModelsEqual(A, self.get_models()['a'])
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=100, unique=True)
-            test2 = CharField(max_length=100)
+    def test_drop_index(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100, index=True)
+
+        self.makemigrations([A])
+
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        self.assertModelsEqual(A, self.get_models()['a'])
+
+    def test_add_field(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        A.create(col1='aaa')
+        A.create(col1='bbb')
+
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100)
+            col2 = CharField(max_length=100, default='')
+
+        self.makemigrations([A])
+        self.migrate()
+
+        self.assertModelsEqual(A, self.get_models()['a'])
+
+    def test_drop_field(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100)
+            col2 = CharField(max_length=100)
+
+        self.makemigrations([A])
+
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        self.assertModelsEqual(A, self.get_models()['a'])
+
+    def test_alter_field(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100)
+
+        self.makemigrations([A])
+
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=50)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        self.assertModelsEqual(A, self.get_models()['a'])
+
+    def test_alter_with_data(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=5)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        A.create(col='abcde')
+
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        data = A.select().first()
+        self.assertEqual(data.col, 'abcde')
+        self.assertModelsEqual(A, self.get_models()['a'])
+
+    def test_alter_with_data2(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        A.create(col='abcdefghij')
+
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=5)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        data = A.select().first()
+
+        self.assertEqual(data.col, 'abcde')
+        self.assertModelsEqual(A, self.get_models()['a'])
+
+    def test_composite_index(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100, unique=True)
+            col2 = CharField(max_length=100)
             class Meta:
                 indexes = [
-                    (('test1', 'test2'), False)
+                    (('col1', 'col2'), False)
                 ]
 
-        snapshot = self.get_snapshot()
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=100, index=True)
-            test2 = CharField(max_length=100)
-            test3 = CharField(max_length=100, unique=True, null=True)
+        self.makemigrations([A])
+
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100, index=True)
+            col2 = CharField(max_length=100)
+            col3 = CharField(max_length=100, unique=True, null=True)
             class Meta:
                 indexes = [
-                    (('test2', 'test3'), True)
+                    (('col2', 'col3'), True)
                 ]
 
-        self.run_migration('test_indexes')
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+        self.makemigrations([A])
+        self.migrate()
 
-    def test_drop_field_add_drop_index(self):
-        snapshot = self.get_snapshot()
+        self.assertModelsEqual(A, self.get_models()['a'])
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=100)
-            test2 = CharField(max_length=200, index=True)
+    def test_add_drop_field_add_drop_index(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100)
+            col2 = CharField(max_length=200, index=True)
 
-        snapshot = self.get_snapshot()
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=100, null=True, unique=True)
+        self.makemigrations([A])
 
-        self.run_migration('test_drop_field_add_drop_index')
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+        @self.add_cleanup
+        class A(TestModel):
+            col1 = CharField(max_length=100, unique=True)
+            col3 = CharField(max_length=200)
+
+        self.makemigrations([A])
+        self.migrate()
+
+        self.assertModelsEqual(A, self.get_models()['a'])
 
     def test_not_null_and_default(self):
-        snapshot = self.get_snapshot()
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100, null=True)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=100, null=True)
+        self.makemigrations([A])
+        self.migrate()
 
-        self.run_migration('test_not_null_and_default1')
-        Model1.create(test1=None)
-        Model1.create(test1='test1')
+        A.create(col=None)
+        A.create(col='val0')
 
-        snapshot = self.get_snapshot()
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=100, default='test2')
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=100, default='val1')
 
-        self.run_migration('test_not_null_and_default2')
-        data = list(Model1.select().order_by(Model1.test1))
-        self.assertEqual(data[0].test1, 'test1')
-        self.assertEqual(data[1].test1, 'test2')
+        self.makemigrations([A])
+        self.migrate()
 
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
-
-    def test_alter_type(self):
-        snapshot = self.get_snapshot()
-
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
-
-        self.run_migration('test_alter_type1')
-        Model1.create(test1='a' * 5)
-
-        snapshot = self.get_snapshot()
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=5)
-
-        self.run_migration('test_alter_type2')
-        data = Model1.select().first()
-        self.assertEqual(data.test1, 'a' * 5)
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+        data = list(A.select().order_by(A.col))
+        self.assertEqual(data[0].col, 'val0')
+        self.assertEqual(data[1].col, 'val1')
+        self.assertModelsEqual(A, self.get_models()['a'])
 
     def test_add_foreign_key(self):
-        snapshot = self.get_snapshot()
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+        @self.add_cleanup
+        class B(TestModel):
+            col = IntegerField()
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = IntegerField()
+        self.makemigrations([A, B])
 
-        self.run_migration('test_add_foreign_key1')
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        m1 = Model1.create(test1='aaa')
-        m2 = Model2.create(test1=m1.id)
+        @self.add_cleanup
+        class B(TestModel):
+            col = IntegerField()
+            col2 = ForeignKeyField(A)
 
-        snapshot = self.get_snapshot()
+        self.makemigrations([A, B])
+        self.migrate()
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+        self.assertModelsEqual(B, self.get_models()['b'])
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = ForeignKeyField(Model1)
-            test2 = ForeignKeyField(Model1, null=True)
+    def test_add_foreign_key_constraint(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        self.run_migration('test_add_foreign_key2')
-        self.assertModelsEqual(Model2, self.get_models()['model2'])
+        @self.add_cleanup
+        class B(TestModel):
+            col = IntegerField()
 
-    def test_drop_foreign_key(self):
-        snapshot = self.get_snapshot()
+        self.makemigrations([A, B])
+        self.migrate()
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+        B.create(col=A.create(col='aaa').id)
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = ForeignKeyField(Model1, unique=True)
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        self.run_migration('test_drop_foreign_key1')
+        @self.add_cleanup
+        class B(TestModel):
+            col = ForeignKeyField(A)
 
-        m1 = Model1.create(test1='aaa')
-        m2 = Model2.create(test1=m1)
+        self.makemigrations([A, B])
+        self.migrate()
 
-        snapshot = self.get_snapshot()
+        self.assertModelsEqual(A, self.get_models()['a'])
+        self.assertModelsEqual(B, self.get_models()['b'])
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+    def test_drop_foreign_key_constraint(self):
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = IntegerField(unique=True)
+        @self.add_cleanup
+        class B(TestModel):
+            col = ForeignKeyField(A, unique=True)
 
-        self.run_migration('test_drop_foreign_key2')
-        self.assertModelsEqual(Model2, self.get_models()['model2'])
+        self.makemigrations([A, B])
+        self.migrate()
+
+        B.create(col=A.create(col='aaa'))
+
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
+
+        @self.add_cleanup
+        class B(TestModel):
+            col = IntegerField(unique=True)
+
+        self.makemigrations([A, B])
+        self.migrate()
+
+        self.assertModelsEqual(A, self.get_models()['a'])
+        self.assertModelsEqual(B, self.get_models()['b'])
 
     def test_alter_foreign_key(self):
-        snapshot = self.get_snapshot()
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+        @self.add_cleanup
+        class B(TestModel):
+            col = ForeignKeyField(A)
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = ForeignKeyField(Model1)
+        self.makemigrations([A, B])
+        self.migrate()
 
-        self.run_migration('test_alter_foreign_key1')
+        B.create(col=A.create(col='aaa'))
 
-        m1 = Model1.create(test1='aaa')
-        m2 = Model2.create(test1=m1)
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        snapshot = self.get_snapshot()
+        @self.add_cleanup
+        class B(TestModel):
+            col = ForeignKeyField(A, on_delete='CASCADE')
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+        self.makemigrations([A, B])
+        self.migrate()
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = ForeignKeyField(Model1, on_delete='CASCADE')
-
-        self.run_migration('test_alter_foreign_key2')
-        self.assertModelsEqual(Model2, self.get_models()['model2'])
+        self.assertModelsEqual(A, self.get_models()['a'])
+        self.assertModelsEqual(B, self.get_models()['b'])
 
     def test_alter_foreign_key_index(self):
-        snapshot = self.get_snapshot()
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+        @self.add_cleanup
+        class B(TestModel):
+            col = ForeignKeyField(A)
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = ForeignKeyField(Model1)
+        self.makemigrations([A, B])
 
-        snapshot = self.get_snapshot()
+        @self.add_cleanup
+        class A(TestModel):
+            col = CharField(max_length=10)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+        @self.add_cleanup
+        class B(TestModel):
+            col = ForeignKeyField(A, unique=True)
 
-        @snapshot.append
-        class Model2(TestModel):
-            test1 = ForeignKeyField(Model1, unique=True)
+        self.makemigrations([A, B])
+        self.migrate()
 
-        self.run_migration('test_alter_foreign_key_index')
-        self.assertModelsEqual(Model2, self.get_models()['model2'])
+        self.assertModelsEqual(A, self.get_models()['a'])
+        self.assertModelsEqual(B, self.get_models()['b'])
 
-    def test_add_primary_key(self):
-        snapshot = self.get_snapshot()
+    # def test_drop_primary_key(self):
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
-            class Meta:
-                primary_key = False
+    # def test_add_drop_primary_key(self):
+    #     snapshot = self.get_snapshot()
 
-        snapshot = self.get_snapshot()
+    #     @self.add_cleanup
+    #     class A(TestModel):
+    #         col = CharField(max_length=10, primary_key=True)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+    #     self.run_migration('test_add_primary_key1')
 
-        self.run_migration('test_add_primary_key')
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+    #     A.create(col='1')
+    #     A.create(col='2')
 
-    def test_add_compisite_primary_key(self):
-        snapshot = self.get_snapshot()
+    #     snapshot = self.get_snapshot()
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
-            test2 = CharField(max_length=10)
-            class Meta:
-                primary_key = False
+    #     @self.add_cleanup
+    #     class A(TestModel):
+    #         col = CharField(max_length=10)
+    #         class Meta:
+    #             primary_key = False
 
-        snapshot = self.get_snapshot()
+    #     self.run_migration('test_add_primary_key2')
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
-            test2 = CharField(max_length=10)
-            class Meta:
-                primary_key = CompositeKey('test1', 'test2')
+    #     snapshot = self.get_snapshot()
 
-        # Just test it works, reflection adds index for primary key
-        self.run_migration('test_add_compisite_primary_key')
+    #     @self.add_cleanup
+    #     class Model1(TestModel):
+    #         test1 = CharField(max_length=10)
 
-    def test_drop_primary_key(self):
-        snapshot = self.get_snapshot()
+    #     migrator = self.get_migrator('test_add_primary_key2')
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+    #     migrator.migrate()
 
-        snapshot = self.get_snapshot()
+    #     self.run_migrator(migrator)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
-            class Meta:
-                primary_key = False
+    #     self.assertModelsEqual(Model1, self.get_models()['model1'])
 
-        # Just test it works, reflection adds primary key to model,
-        # even if there is no primary key
-        self.run_migration('test_drop_primary_key')
+    # def test_add_compisite_primary_key(self):
+    #     snapshot = self.get_snapshot()
 
-    def test_change_primary_key_to_default(self):
-        snapshot = self.get_snapshot()
+    #     @self.add_cleanup
+    #     class Model1(TestModel):
+    #         test1 = CharField(max_length=10)
+    #         test2 = CharField(max_length=10)
+    #         class Meta:
+    #             primary_key = False
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10, primary_key=True)
+    #     snapshot = self.get_snapshot()
 
-        snapshot = self.get_snapshot()
+    #     @self.add_cleanup
+    #     class Model1(TestModel):
+    #         test1 = CharField(max_length=10)
+    #         test2 = CharField(max_length=10)
+    #         class Meta:
+    #             primary_key = CompositeKey('test1', 'test2')
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+    #     # Just test it works, reflection adds index for primary key
+    #     self.run_migration('test_add_compisite_primary_key')
 
-        self.run_migration('test_change_primary_key_to_default')
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+    # def test_change_primary_key_to_default(self):
+    #     snapshot = self.get_snapshot()
 
-    def test_change_primary_key_to_custom(self):
-        snapshot = self.get_snapshot()
+    #     @self.add_cleanup
+    #     class Model1(TestModel):
+    #         test1 = CharField(max_length=10, primary_key=True)
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+    #     self.run_migration('test_change_primary_key_to_default1')
 
-        snapshot = self.get_snapshot()
+    #     Model1.create(test1='1')
+    #     Model1.create(test1='2')
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10, primary_key=True)
+    #     snapshot = self.get_snapshot()
 
-        self.run_migration('test_change_primary_key_to_custom')
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
+    #     @self.add_cleanup
+    #     class Model1(TestModel):
+    #         test1 = CharField(max_length=10)
 
-    def test_data_migration(self):
-        snapshot = self.get_snapshot()
+    #     migrator = self.get_migrator('test_change_primary_key_to_default2')
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = CharField(max_length=10)
+    #     @migrator.before_set_not_null('id')
+    #     def set_id(model, field):
+    #         cast_to = 'integer' if IS_POSTGRESQL else 'signed'
+    #         model.update({field: model.test1.cast(cast_to)}).execute()
 
-        self.run_migration('test_data_migration1')
+    #     migrator.migrate()
 
-        Model1.create(test1='1')
-        Model1.create(test1='2')
+    #     self.run_migrator(migrator)
 
-        snapshot = self.get_snapshot()
+    #     self.assertModelsEqual(Model1, self.get_models()['model1'])
 
-        @snapshot.append
-        class Model1(TestModel):
-            test1 = IntegerField(default=0)
+    # def test_change_primary_key_to_custom(self):
+    #     snapshot = self.get_snapshot()
 
-        migrator = self.get_migrator('test_data_migration2')
+    #     @self.add_cleanup
+    #     class Model1(TestModel):
+    #         test1 = CharField(max_length=10)
 
-        data = None
+    #     snapshot = self.get_snapshot()
 
-        @migrator.python
-        def before():
-            nonlocal data;
-            data = [(m.id, int(m.test1)) for m in migrator.orm['model1'].select()]
+    #     @self.add_cleanup
+    #     class Model1(TestModel):
+    #         test1 = CharField(max_length=10, primary_key=True)
 
-        migrator.migrate()
-
-        @migrator.python
-        def after():
-            Model1 = migrator.orm['model1']
-            for id, value in data:
-                q = (Model1.update({Model1.test1: value})
-                           .where(Model1.id == id))
-                q.execute()
-
-        self.run_migrator(migrator)
-
-        values = [m.test1 for m in Model1.select().order_by(Model1.test1)]
-
-        self.assertEqual(values, [1, 2])
-        self.assertModelsEqual(Model1, self.get_models()['model1'])
-
+    #     self.run_migration('test_change_primary_key_to_custom')
+    #     self.assertModelsEqual(Model1, self.get_models()['model1'])
 
 if __name__ == '__main__':
     unittest.main()

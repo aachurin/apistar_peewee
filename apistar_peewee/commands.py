@@ -17,7 +17,7 @@ class Colorizer:
     def __init__(self):
         self.supports_color = self.supports_color()
 
-    def supports_color(self): # noqa
+    def supports_color(self):  # type: ignore
         """
         Return True if the running system's terminal supports color,
         and False otherwise.
@@ -53,10 +53,16 @@ def get_models(models):
     return result
 
 
-def createtables(orm: PeeweeORM, database: str='default'):
+def createtables(console: Console, orm: PeeweeORM, database: str='default', showsql: bool=False):
     """Create non-abstract tables"""
     models = get_models(orm.get_models(database))
-    orm.get_database(database).create_tables(models, safe=True)
+    db = orm.get_database(database)
+    c = Colorizer()
+    if showsql:
+        def fake_execute_sql(sql, params, *args, **kwargs):
+            console.echo(c.colored('SQL> %s %s' % (sql, params), 'yellow'))
+        db.execute_sql = fake_execute_sql
+    db.create_tables(models, safe=False)
 
 
 def droptables(orm: PeeweeORM, database: str='default'):
@@ -69,9 +75,10 @@ def makemigrations(console: Console, orm: PeeweeORM, name: str='', database: str
     """Create migration"""
     from . migrator import Router, MigrationError
     c = Colorizer()
-    router = Router(database=orm.get_database(database), models=get_models(orm.get_models(database)))
+    db = orm.get_database(database)
+    router = Router(database=db, migrate_dir=db.migrate_dir, migrate_table=db.migrate_table)
     try:
-        result = router.create()
+        result = router.create(models=get_models(orm.get_models(database)))
     except MigrationError as e:
         console.echo(c.colored('Migration error: ' + str(e), 'red'))
         return
@@ -81,13 +88,14 @@ def makemigrations(console: Console, orm: PeeweeORM, name: str='', database: str
         console.echo(c.colored('Migration `%s` has been created.' % result[0], 'yellow'))
 
 
-def migrate(console: Console, orm: PeeweeORM, migration: str='', database: str='default'):
+def migrate(console: Console, orm: PeeweeORM, to: str='', database: str='default'):
     """Run migrations"""
     from . migrator import Router, MigrationError
     c = Colorizer()
-    router = Router(database=orm.get_database(database), models=get_models(orm.get_models(database)))
+    db = orm.get_database(database)
+    router = Router(database=db, migrate_dir=db.migrate_dir, migrate_table=db.migrate_table)
     try:
-        forward, steps = router.migrate(migration)
+        steps = router.migrate(to)
     except MigrationError as e:
         console.echo(c.colored('Migration error: ' + str(e), 'red'))
         return
@@ -96,7 +104,7 @@ def migrate(console: Console, orm: PeeweeORM, migration: str='', database: str='
         return
     for step in steps:
         step.run()
-        if forward:
+        if step.direction == 'forward':
             console.echo(c.colored('[X] ' + step.name, 'green'))
         else:
             console.echo(c.colored('[ ] ' + step.name, 'yellow'))
@@ -106,21 +114,22 @@ def listmigrations(console: Console, orm: PeeweeORM, database: str='default'):
     """List migrations"""
     from . migrator import Router
     c = Colorizer()
-    router = Router(database=orm.get_database(database), models=get_models(orm.get_models(database)))
-    done = router.done
-    for name in done:
+    db = orm.get_database(database)
+    router = Router(database=db, migrate_dir=db.migrate_dir, migrate_table=db.migrate_table)
+    for name in router.done:
         console.echo(c.colored('[X] ' + name, 'green'))
     for name in router.undone:
         console.echo(c.colored('[ ] ' + name, 'yellow'))
 
 
-def showmigrations(console: Console, orm: PeeweeORM, migration: str='', database: str='default'):
+def showmigrations(console: Console, orm: PeeweeORM, to: str='', database: str='default'):
     """Show migrations instructions"""
     from . migrator import Router, MigrationError
     c = Colorizer()
-    router = Router(database=orm.get_database(database), models=get_models(orm.get_models(database)))
+    db = orm.get_database(database)
+    router = Router(database=db, migrate_dir=db.migrate_dir, migrate_table=db.migrate_table)
     try:
-        forward, steps = router.migrate(migration)
+        steps = router.migrate(to)
     except MigrationError as e:
         console.echo(c.colored('Migration error: ' + str(e), 'red'))
         return
@@ -128,12 +137,15 @@ def showmigrations(console: Console, orm: PeeweeORM, migration: str='', database
         console.echo(c.colored('There is nothing to migrate', 'yellow'))
         return
     for step in steps:
-        if forward:
+        if step.direction == 'forward':
             console.echo(c.colored('[ ] ' + step.name + ':', 'yellow'))
         else:
             console.echo(c.colored('[X] ' + step.name + ':', 'green'))
-        for op in step.get_ops():
-            console.echo(c.colored('  ' + op, 'cyan'))
+        for op, color in step.get_ops():
+            if color == 'ALERT':
+                console.echo(c.colored('  %s' % op.description, 'magenta'))
+            else:
+                console.echo(c.colored('  %s' % op.description, 'cyan'))
         console.echo()
 
 
