@@ -1,3 +1,4 @@
+import re
 import os
 import sys
 from apistar import Command
@@ -85,7 +86,10 @@ def makemigrations(console: Console, orm: PeeweeORM, name: str='', database: str
     if not result:
         console.echo(c.colored('No changes found.', 'green'))
     else:
-        console.echo(c.colored('Migration `%s` has been created.' % result[0], 'yellow'))
+        console.echo(c.colored('Migration `%s` has been created.' % result[0], 'cyan'))
+        for line, text in result[1:]:
+            text = ''.join([c.colored(j, 'magenta' if i % 2 else 'yellow') for i, j in enumerate(text.split('`'))])
+            console.echo(c.colored('Line %d: ' % line, 'yellow') + text)
 
 
 def migrate(console: Console, orm: PeeweeORM, to: str='', database: str='default'):

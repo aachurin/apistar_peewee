@@ -123,7 +123,9 @@ class MigrationTestCase(unittest.TestCase):
         return cls
 
     def makemigrations(self, models):
-        self.router.create(models=models)
+        name = self.router.create(models=models)[0]
+        if PRINT_DEBUG:
+            print(self.router.storage._read(name))
 
     def migrate(self):
         steps = self.router.migrate()
@@ -369,6 +371,7 @@ class MigrationTests(MigrationTestCase):
         self.migrate()
 
         data = list(A.select().order_by(A.col))
+
         self.assertEqual(data[0].col, 'val0')
         self.assertEqual(data[1].col, 'val1')
         self.assertModelsEqual(A, self.get_models()['a'])

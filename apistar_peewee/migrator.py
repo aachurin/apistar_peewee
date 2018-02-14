@@ -2,8 +2,9 @@ import os
 import re
 import peewee
 import textwrap
-from datetime import datetime
-from collections import OrderedDict
+import decimal
+from datetime import datetime, date, time
+from collections import OrderedDict, namedtuple
 
 
 __all__ = ('Router', 'Snapshot', 'Migrator', 'deconstructor')
@@ -502,15 +503,22 @@ class Router:
         compiler = Compiler(models)
         if compiler.snapshot == Compiler(last_snap).snapshot:
             return []
+        alerts = [name]
         new_snap = self.storage.exec(compiler.module_code)['snapshot']
-        migrator = Migrator(self.database, name, last_snap, new_snap, hints=True)
+        migrator = Migrator(self.database, name, last_snap, new_snap, compute_hints=True)
         migrator.migrate()
         if migrator.forward_hints:
+            code_num_lines = len(compiler.get_code().splitlines())
+            for linenum, alert in migrator.forward_hints.get_alerts():
+                alerts.append((linenum + code_num_lines, alert))
             compiler.add_code(str(migrator.forward_hints))
         if migrator.backward_hints:
+            code_num_lines = len(compiler.get_code().splitlines())
+            for linenum, alert in migrator.backward_hints.get_alerts():
+                alerts.append((linenum + code_num_lines, alert))
             compiler.add_code(str(migrator.backward_hints))
         self.storage.write(name, compiler.get_code())
-        return [name]
+        return alerts
 
     def migrate(self, migration=None):
         """Run migration."""
@@ -565,78 +573,48 @@ class State:
         self.__dict__ = kwargs
 
 
-class MigrateCode:
-
-    def __init__(self, funcname, args):
-        self.vars = {}
-        self.funcname = funcname
-        self.args = args
-        self.results = []
-
-    def __bool__(self):
-        return bool(self.results)
-
-    def __str__(self):
-        code = 'def %s(%s):\n' % (self.funcname, ', '.join(self.args))
-        lines = []
-        for v in self.vars.items():
-            lines.append('%s = %s' % v)
-        if not self.results:
-            lines.append('return []')
-        else:
-            lines.append('return [')
-            for ret, comment in self.results:
-                if comment:
-                    lines.append('    # ' + comment)
-                lines.append('    %s,' % ret)
-            lines.append(']')
-        code += textwrap.indent('\n'.join(lines), ' ' * 4) + '\n'
-        return code
-
-    def add_result(self, ret, comment=''):
-        self.results.append((ret, comment))
-
-    def set_var_if_not_exists(self, name, value):
-        if name not in self.vars:
-            self.vars[name] = value
-            # self.lines.append('%s = %s' % (name, value))
+HintDescription = namedtuple('HintDescription', ['test', 'exec', 'final'])
 
 
 class Migrator:
     """Provide migrations."""
 
-    hint_builders = []  # type: list
     forward_hints = ''
     backward_hints = ''
 
-    def __init__(self, database, name, old_orm, new_orm, run_data_migration=None, hints=False):
+    def __init__(self, database, name, old_orm, new_orm, run_data_migration=None, compute_hints=False):
         self.database = database
         self.name = name
         self.old_orm = old_orm
         self.new_orm = new_orm
         self.run_data_migration = run_data_migration
         self.operations = []
-        self.hints = hints
-        if hints:
+        if compute_hints:
+            self.compute_hints = True
             self.forward_hints = MigrateCode('forward', ('old_orm', 'new_orm'))
             self.backward_hints = MigrateCode('backward', ('old_orm', 'new_orm'))
+        else:
+            self.compute_hints = False
         self.op = OperationProxy(Operations.from_database(database), self.add_op)
 
     @classmethod
-    def add_hint(cls, f1, f2):
-        if isinstance(f1, type):
-            test1 = f1
-            f1 = lambda obj: isinstance(obj.old_field, test1)
-        elif f1 is None:
-            f1 = lambda obj: obj.old_field is None
-        if isinstance(f2, type):
-            test2 = f2
-            f2 = lambda obj: isinstance(obj.new_field, test2)
-        elif f2 is None:
-            f2 = lambda obj: obj.new_field is None
-        assert callable(f1) and callable(f2)
+    def add_hint(cls, type1, type2, *tests, final=True):
+        if type1 is None:
+            f1 = lambda obj: True
+        else:
+            f1 = lambda obj: isinstance(obj.old_field, type1)
+        if type2 is None:
+            f2 = lambda obj: True
+        else:
+            f2 = lambda obj: isinstance(obj.new_field, type2)
+        assert all(callable(x) for x in tests)
         def appender(fn):
-            cls.hint_builders.append((lambda obj: f1(obj) and f2(obj), fn))
+            cls.hints.append(
+                HintDescription(
+                    test=(lambda obj: f1(obj) and f2(obj) and all(f(obj) for f in tests)),
+                    exec=fn,
+                    final=final
+                ))
             return fn
         return appender
 
@@ -766,7 +744,10 @@ class Migrator:
             self.op.add_column(field)
             if not field.null:
                 state.add_not_null.append(field)
-                self.add_data_migrate_hints(None, field)
+            self.add_data_migration_hints(None, field, False)
+
+        for field in state.drop_fields:
+            self.add_data_migration_hints(field, None, False)
 
         for field1, field2 in state.check_fields:
             if field1.column_name != field2.column_name:
@@ -782,12 +763,13 @@ class Migrator:
                 state.drop_fields.append(field1)
                 if not field2.null:
                     state.add_not_null.append(field2)
-                self.add_data_migrate_hints(field1, field2)
+                self.add_data_migration_hints(field1, field2, True)
             elif field1.null != field2.null:
                 if field2.null:
                     state.drop_not_null.append(field2)
                 else:
                     state.add_not_null.append(field2)
+                self.add_data_migration_hints(field1, field2, False)
 
     def _cleanup_model(self, state, model1, model2):
         for field in state.drop_fields:
@@ -808,104 +790,173 @@ class Migrator:
         # if pk_columns2 and pk_columns2 != pk_columns1:
         #     self.add_primary_key_constraint(model2)
 
-    def add_data_migrate_hints(self, field1, field2):
-        if not self.hints:
+    def add_data_migration_hints(self, field1, field2, type_changed):
+        if not self.compute_hints:
             return
 
-        for test, builder in self.hint_builders:
-            hint = Hint(self.database, field1, field2)
-            if test(hint):
-                hint.exec(self.forward_hints, builder)
+        def run_helper(helper, old_field, new_field, code):
+            kwargs = {
+                'postgres': isinstance(self.database, peewee.PostgresqlDatabase),
+                'mysql': isinstance(self.database, peewee.MySQLDatabase),
+                'old_field': old_field,
+                'new_field': new_field,
+                'old_model': ('old_' + old_field.model._meta.name) if old_field else None,
+                'new_model': new_field.model._meta.name if new_field else None,
+            }
+            result = [x.format(**kwargs) for x in helper(**kwargs)]
+            if kwargs['old_model']:
+                code.set_var_if_not_exists(kwargs['old_model'], 'old_orm[%r]' % old_field.model._meta.name)
+            if kwargs['new_model']:
+                code.set_var_if_not_exists(kwargs['new_model'], 'new_orm[%r]' % kwargs['new_model'])
+            code.add_operation(result)
+
+        if (field1 is None or field1.null) and (field2 is not None and not field2.null):
+            run_helper(set_not_null_helper, None, field2, self.forward_hints)
+        if (field2 is None or field2.null) and (field1 is not None and not field1.null):
+            run_helper(set_not_null_helper, None, field1, self.backward_hints)
+
+        if type_changed:
+            for (tp1, tp2), helper in DATA_MIGRATE_HELPERS:
+                if isinstance(field1, tp1) and isinstance(field2, tp2):
+                    run_helper(helper, field1, field2, self.forward_hints)
+                    break
+
+            for (tp1, tp2), helper in DATA_MIGRATE_HELPERS:
+                if isinstance(field2, tp1) and isinstance(field1, tp2):
+                    run_helper(helper, field2, field1, self.backward_hints)
+                    break
+
+
+class MigrateCode:
+
+    def __init__(self, funcname, args):
+        self.vars = {}
+        self.funcname = funcname
+        self.args = args
+        self.results = []
+        self.alerts = []
+
+    def __bool__(self):
+        return bool(self.results)
+
+    def __str__(self):
+        code = 'def %s(%s):\n' % (self.funcname, ', '.join(self.args))
+        lines = []
+        for v in self.vars.items():
+            lines.append('%s = %s' % v)
+        if not self.results:
+            lines.append('return []')
+        else:
+            lines.append('return [')
+            for line in self.results:
+                lines.append('    ' + line)
+            lines.append(']')
+        code += textwrap.indent('\n'.join(lines), ' ' * 4) + '\n'
+        return code
+
+    def get_alerts(self):
+        start_line = 4 + len(self.vars)
+        return [(start_line + line, alert) for line, alert in self.alerts]
+
+    def set_var_if_not_exists(self, name, value):
+        if name not in self.vars:
+            self.vars[name] = value
+            # self.lines.append('%s = %s' % (name, value))
+
+    def add_operation(self, result):
+        comment, code, *alerts = result
+        if alerts:
+            self.alerts.extend([(len(self.results), alert) for alert in alerts])
+        if comment:
+            self.results.append('# ' + comment)
+        if code:
+            self.results.append(code + ',')
+
+
+FIELD_DEFAULTS = (
+    (peewee.CharField, ''),
+    (peewee.IntegerField, 0),
+    (peewee.DecimalField, decimal.Decimal),
+    (peewee.DateTimeField, datetime.now),
+    (peewee.DateField, date.today),
+    (peewee.TimeField, time),
+    (peewee.BooleanField, False),
+)
+
+
+def set_not_null_helper(new_field, **kwargs):
+    default = new_field.default
+    if callable(default):
+        default = default()
+    comment = ''
+    if default is None:
+        for cls, default_value in FIELD_DEFAULTS:
+            if isinstance(new_field, cls):
+                default = default_value
+                if callable(default):
+                    default = default()
+                comment = (
+                    'Value `%r` is selected as the default value for field `{new_model}.{new_field.name}` '
+                    'since the field is not null' % default
+                    )
                 break
-
-        for test, builder in self.hint_builders:
-            hint = Hint(self.database, field1, field2)
-            if test(hint):
-                hint.exec(self.backward_hints, builder)
-                break
-
-
-class Hint:
-
-    def __init__(self, database, old_field, new_field):
-        self.database = database
-        self.postgres = isinstance(database, peewee.PostgresqlDatabase)
-        self.mysql = isinstance(database, peewee.MySQLDatabase)
-        self.old_field = old_field
-        self.new_field = new_field
-        self.old_model = ('old_' + old_field.model._meta.name) if old_field else None
-        self.new_model = new_field.model._meta.name if new_field else None
-
-    def exec(self, code, fn):
-        if self.old_model:
-            code.set_var_if_not_exists(self.old_model, 'old_orm[%r]' % self.old_field.model._meta.name)
-        if self.new_model:
-            code.set_var_if_not_exists(self.new_model, 'new_orm[%r]' % self.new_model)
-        fn(code, self.__dict__)
-
-
-@Migrator.add_hint(peewee.CharField, peewee.CharField)
-def charfield_to_charfield(code, context):
-    code.add_result(
-        '{new_model}.update({{{new_model}.{new_field.name}: '
-        'fn.SUBSTRING({old_model}.{old_field.name}, 1, {new_field.max_length})}}).'
-        'where({old_model}.{old_field.name}.is_null(False))'.format(
-            **context
-        ),
-        '{old_model}.{old_field.name}: -> VARCHAR({new_field.max_length})'.format(
-            **context
+    if default is None:
+        comment = 'Check the field `{new_model}.{new_field.name}` does not contain null values'
+        return (comment, '', comment)
+    else:
+        return (
+            'Apply default value %r to the field {new_model}.{new_field.name}' % default,
+            '{new_model}.update({{{new_model}.{new_field.name}: %r}})'
+            '.where({new_model}.{new_field.name}.is_null(True))' % default,
+            comment
         )
+
+
+def charfield_to_charfield_helper(old_field, new_field, **kwargs):
+    if old_field.max_length == new_field.max_length:
+        return
+    return (
+        'Convert datatype of the field {new_model}.{new_field.name}: VARCHAR({old_field.max_length}) -> VARCHAR({new_field.max_length})',
+        '{new_model}.update({{{new_model}.{new_field.name}: fn.SUBSTRING({old_model}.{old_field.name}, 1, {new_field.max_length})}})'
+            '.where({old_model}.{old_field.name}.is_null(False))'
     )
 
 
-@Migrator.add_hint(peewee.Field, peewee.IntegerField)
-def field_to_charfield(code, context):
-    typecast = 'INTEGER' if context['postgres'] else 'SIGNED'
-    code.add_result(
-        "{new_model}.update({{{new_model}.{new_field.name}: "
-        "{old_model}.{old_field.name}.cast('{typecast}')}})."
-        "where({old_model}.{old_field.name}.is_null(False))".format(
-            typecast=typecast,
-            **context
-        ),
-        '{old_model}.{old_field.name}: -> INTEGER'.format(
-            **context
-        )
+def field_to_charfield_helper(postgres=False, **kwargs):
+    typecast = 'VARCHAR' if postgres else 'CHAR'
+    return (
+        'Convert datatype of the field {new_model}.{new_field.name}: {old_field.field_type} -> VARCHAR({new_field.max_length})',
+        '{new_model}.update({{{new_model}.{new_field.name}: {old_model}.{old_field.name}.cast(%r)}})'
+            '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
+        'Check the field `{new_model}.{new_field.name}` are correctly converted to string',
     )
 
 
-@Migrator.add_hint(peewee.Field, peewee.CharField)
-def field_to_charfield(code, context):
-    typecast = 'VARCHAR' if context['postgres'] else 'CHAR'
-    code.add_result(
-        "{new_model}.update({{{new_model}.{new_field.name}: "
-        "{old_model}.{old_field.name}.cast('{typecast}')}})."
-        "where({old_model}.{old_field.name}.is_null(False))".format(
-            typecast=typecast,
-            **context
-        ),
-        '{old_model}.{old_field.name}: -> VARCHAR({new_field.max_length})'.format(
-            **context
-        )
+def field_to_integer_helper(postgres=False, **kwargs):
+    typecast = 'INTEGER' if postgres else 'SIGNED'
+    return (
+        'Convert datatype of the field {new_model}.{new_field.name}: {old_field.field_type} -> {new_field.field_type}',
+        '{new_model}.update({{{new_model}.{new_field.name}: {old_model}.{old_field.name}.cast(%r)}})'
+            '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
+        'Check the field `{new_model}.{new_field.name}` are correctly converted to integer',
     )
 
 
-# @Migrator.add_hint
-# class ToFieldNotNull(Hint):
-
-#     def test(self):
-#         return self.old_field is None and not self.new_field.null
-
-
-@Migrator.add_hint(peewee.Field, peewee.Field)
-def field_to_field(code, context):
-    code.add_result(
-        "{new_model}.update({{{new_model}.{new_field.name}: "
-        "{old_model}.{old_field.name}}})".format(
-            **context
-        ),
-        "Don't know how to convert values"
+def field_to_field_helper(**kwargs):
+    return (
+        'Don\'t know how to do the conversion correctly, use the naive',
+        '{new_model}.update({{{new_model}.{new_field.name}: {old_model}.{old_field.name}}})',
+            '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
+        'Check the field `{new_model}.{new_field.name}` are correctly converted',
     )
+
+
+DATA_MIGRATE_HELPERS = [
+    ((peewee.CharField, peewee.CharField), charfield_to_charfield_helper),
+    ((peewee.Field, peewee.CharField), field_to_charfield_helper),
+    ((peewee.Field, peewee.IntegerField), field_to_integer_helper),
+    ((peewee.Field, peewee.Field), field_to_field_helper),
+]
 
 
 class SQLOP:
@@ -1071,18 +1122,8 @@ class Operations:
 
     @operation
     @model_field_args
-    def apply_default(self, model: peewee.Model, field: peewee.Field):
-        default = field.default
-        if callable(default):
-            default = default()
-        return model.update({field: default}).where(field.is_null(True))
-
-    @operation
-    @model_field_args
     def add_not_null(self, model: peewee.Model, field: peewee.Field):
         operations = []
-        if field.default is not None:
-            operations.append(self.apply_default(model, field))
         operations.append(self._add_not_null(model, field))
         return operations
 
