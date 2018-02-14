@@ -144,59 +144,97 @@ For all commands you can specify database using `--database` argument. By defaul
 
 ### Migrations
 
+Previous model state:
+```python
+class Tweet(peewee.Model):
+    f1 = peewee.CharField(max_length=50)
+    price = peewee.IntegerField()
+    price2 = peewee.IntegerField()
+```
+
+New model state:
+```python
+class Tweet(peewee.Model):
+    f1 = CharField(max_length=20)
+    price = IntegerField()
+    price2 = CharField(max_length=200)
+    price3 = CharField(max_length=200)
+```
+
 Create new migration:
 ```bash
 $ apistar makemigrations
-Migration `002_migration_201802052205` has been created.
+Migration `0002_migration_201802142308` has been created.
+Line 25: Value '' is selected as the default value for field tweet.price3 since the field is not null
+Line 27: Check the field tweet.price2 are correctly converted to string
+Line 36: Check the field tweet.price2 are correctly converted to integer
 ```
 
 List migrations:
 ```bash
 $ apistar listmigrations
-[X] 001_migration_201802052204
-[ ] 002_migration_201802052205
+[X] 0001_migration_201802142130
+[ ] 0002_migration_201802142308
 ```
 
 Show migration operations:
 ```bash
 $ apistar showmigrations
-[ ] 002_migration_201802052205:
-  SQL> ALTER TABLE "tweet" ALTER COLUMN "text" TYPE VARCHAR(50)
-  SQL> ALTER TABLE "tweet" ADD COLUMN "rating" INTEGER
-  SQL> UPDATE "tweet" SET "rating" = %s WHERE ("rating" IS %s) [0, None]
-  SQL> ALTER TABLE "tweet" ALTER COLUMN "rating" SET NOT NULL
-  Python> add_step(step='002_migration_201802052205')
+[ ] 0002_migration_201802142308:
+  SQL> ALTER TABLE "tweet" ADD COLUMN "price3" VARCHAR(200) []
+  SQL> ALTER TABLE "tweet" RENAME COLUMN "f1" TO "old__f1" []
+  SQL> ALTER TABLE "tweet" ADD COLUMN "f1" VARCHAR(20) []
+  SQL> ALTER TABLE "tweet" RENAME COLUMN "price2" TO "old__price2" []
+  SQL> ALTER TABLE "tweet" ADD COLUMN "price2" VARCHAR(200) []
+  SQL> UPDATE "tweet" SET "price3" = %s WHERE ("price3" IS %s) ['', None]
+  SQL> UPDATE "tweet" SET "price2" = CAST("old__price2" AS VARCHAR) WHERE ("old__price2" IS NOT %s) [None]
+  SQL> UPDATE "tweet" SET "f1" = SUBSTRING("old__f1", %s, %s) WHERE ("old__f1" IS NOT %s) [1, 20, None]
+  SQL> ALTER TABLE "tweet" DROP COLUMN "old__f1" []
+  SQL> ALTER TABLE "tweet" DROP COLUMN "old__price2" []
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "price3" SET NOT NULL []
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "f1" SET NOT NULL []
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "price2" SET NOT NULL []
+  PY>  set_done('0002_migration_201802142308')
 ```
 
 Run migrations:
 ```bash
 $ apistar migrate
-[X] 002_migration_201802052205
+[X] 0002_migration_201802142308
 
 $ apistar listmigrations
-[X] 001_migration_201802052204
-[X] 002_migration_201802052205
+[X] 0001_migration_201802142130
+[X] 0002_migration_201802142308
 ```
 
 Rollback migrations:
 ```
-$ apistar showmigrations --migration 001
-[X] 002_migration_201802052205:
-  SQL> ALTER TABLE "tweet" DROP COLUMN "rating"
-  SQL> ALTER TABLE "tweet" ALTER COLUMN "text" TYPE VARCHAR(100)
-  Python> drop_step(step='002_migration_201802052205')
+$ apistar showmigrations --to 1
+[X] 0002_migration_201802142308:
+  SQL> ALTER TABLE "tweet" RENAME COLUMN "price2" TO "old__price2" []
+  SQL> ALTER TABLE "tweet" ADD COLUMN "price2" INTEGER []
+  SQL> ALTER TABLE "tweet" RENAME COLUMN "f1" TO "old__f1" []
+  SQL> ALTER TABLE "tweet" ADD COLUMN "f1" VARCHAR(50) []
+  SQL> UPDATE "tweet" SET "price2" = CAST("old__price2" AS INTEGER) WHERE ("old__price2" IS NOT %s) [None]
+  SQL> UPDATE "tweet" SET "f1" = SUBSTRING("old__f1", %s, %s) WHERE ("old__f1" IS NOT %s) [1, 50, None]
+  SQL> ALTER TABLE "tweet" DROP COLUMN "price3" []
+  SQL> ALTER TABLE "tweet" DROP COLUMN "old__price2" []
+  SQL> ALTER TABLE "tweet" DROP COLUMN "old__f1" []
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "price2" SET NOT NULL []
+  SQL> ALTER TABLE "tweet" ALTER COLUMN "f1" SET NOT NULL []
+  PY>  set_undone('0002_migration_201802142308')
 
-$ apistar migrate --migration 001
-[ ] 002_migration_201802052205
+$ apistar migrate --to 1
+[ ] 0002_migration_201802142308
 
 $ apistar listmigrations
-[X] 001_migration_201802052204
-[ ] 002_migration_20180205220
+[X] 0001_migration_201802142130
+[ ] 0002_migration_201802142308
 
-$ apistar showmigrations --migrate zero
-[X] 001_migration_201802052204:
-  SQL> DROP TABLE "tweet"
-  Python> drop_step(step='001_migration_201802052204')
+$ apistar showmigrations --to zero
+[X] 0001_migration_201802142130:
+  SQL> DROP TABLE "tweet" []
+  PY>  set_undone('0001_migration_201802142130')
 ```
 
 To control where the migrations are created,
