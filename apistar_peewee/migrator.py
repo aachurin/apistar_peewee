@@ -600,14 +600,15 @@ class Migrator:
     @classmethod
     def add_hint(cls, type1, type2, *tests, final=True):
         if type1 is None:
-            f1 = lambda obj: True
+            def f1(obj): return True
         else:
-            f1 = lambda obj: isinstance(obj.old_field, type1)
+            def f1(obj): return isinstance(obj.old_field, type1)
         if type2 is None:
-            f2 = lambda obj: True
+            def f2(obj): return True
         else:
-            f2 = lambda obj: isinstance(obj.new_field, type2)
+            def f2(obj): return isinstance(obj.new_field, type2)
         assert all(callable(x) for x in tests)
+
         def appender(fn):
             cls.hints.append(
                 HintDescription(
@@ -916,18 +917,22 @@ def charfield_to_charfield_helper(old_field, new_field, **kwargs):
     if old_field.max_length == new_field.max_length:
         return
     return (
-        'Convert datatype of the field {new_model}.{new_field.name}: VARCHAR({old_field.max_length}) -> VARCHAR({new_field.max_length})',
-        '{new_model}.update({{{new_model}.{new_field.name}: fn.SUBSTRING({old_model}.{old_field.name}, 1, {new_field.max_length})}})'
-            '.where({old_model}.{old_field.name}.is_null(False))'
+        'Convert datatype of the field {new_model}.{new_field.name}: '
+        'VARCHAR({old_field.max_length}) -> VARCHAR({new_field.max_length})',
+        '{new_model}.update({{{new_model}.{new_field.name}: '
+        'fn.SUBSTRING({old_model}.{old_field.name}, 1, {new_field.max_length})}})'
+        '.where({old_model}.{old_field.name}.is_null(False))'
     )
 
 
 def field_to_charfield_helper(postgres=False, **kwargs):
     typecast = 'VARCHAR' if postgres else 'CHAR'
     return (
-        'Convert datatype of the field {new_model}.{new_field.name}: {old_field.field_type} -> VARCHAR({new_field.max_length})',
-        '{new_model}.update({{{new_model}.{new_field.name}: {old_model}.{old_field.name}.cast(%r)}})'
-            '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
+        'Convert datatype of the field {new_model}.{new_field.name}: '
+        '{old_field.field_type} -> VARCHAR({new_field.max_length})',
+        '{new_model}.update({{{new_model}.{new_field.name}: '
+        '{old_model}.{old_field.name}.cast(%r)}})'
+        '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
         'Check the field `{new_model}.{new_field.name}` are correctly converted to string',
     )
 
@@ -935,9 +940,11 @@ def field_to_charfield_helper(postgres=False, **kwargs):
 def field_to_integer_helper(postgres=False, **kwargs):
     typecast = 'INTEGER' if postgres else 'SIGNED'
     return (
-        'Convert datatype of the field {new_model}.{new_field.name}: {old_field.field_type} -> {new_field.field_type}',
-        '{new_model}.update({{{new_model}.{new_field.name}: {old_model}.{old_field.name}.cast(%r)}})'
-            '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
+        'Convert datatype of the field {new_model}.{new_field.name}: '
+        '{old_field.field_type} -> {new_field.field_type}',
+        '{new_model}.update({{{new_model}.{new_field.name}: '
+        '{old_model}.{old_field.name}.cast(%r)}})'
+        '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
         'Check the field `{new_model}.{new_field.name}` are correctly converted to integer',
     )
 
@@ -946,7 +953,7 @@ def field_to_field_helper(**kwargs):
     return (
         'Don\'t know how to do the conversion correctly, use the naive',
         '{new_model}.update({{{new_model}.{new_field.name}: {old_model}.{old_field.name}}})',
-            '.where({old_model}.{old_field.name}.is_null(False))' % typecast,
+        '.where({old_model}.{old_field.name}.is_null(False))',
         'Check the field `{new_model}.{new_field.name}` are correctly converted',
     )
 
