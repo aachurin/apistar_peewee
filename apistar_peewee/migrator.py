@@ -656,7 +656,7 @@ class Migrator:
             self._migrate_models(models_to_migrate)
 
         # Remove models
-        for name in [m for m in models1 if m not in models2]:
+        for name in [m for m in reversed(models1) if m not in models2]:
             self.op.drop_table(models1[name])
 
     def _is_index_for_foreign_key(self, index):

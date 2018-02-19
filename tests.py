@@ -167,16 +167,21 @@ class MigrationTests(MigrationTestCase):
 
         self.assertModelsEqual(A, self.get_models()['a'])
 
-    def test_drop_model(self):
+    def test_drop_models(self):
         @self.add_cleanup
         class A(TestModel):
             col = CharField(max_length=100, unique=True)
 
-        self.makemigrations([A])
+        @self.add_cleanup
+        class B(TestModel):
+            col = ForeignKeyField(A)
+
+        self.makemigrations([A, B])
         self.makemigrations([])
         self.migrate()
 
         self.assertFalse('a' in self.get_models())
+        self.assertFalse('b' in self.get_models())
 
     def test_add_index(self):
         @self.add_cleanup
