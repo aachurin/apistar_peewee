@@ -36,17 +36,9 @@ class AliasMeta(type):
 
 class Session(metaclass=AliasMeta):
 
-    def __init__(self, context, models) -> None:
+    def __init__(self, txn, models) -> None:
         self.__dict__ = models
-        self._context = context
-
-    @property
-    def db(self):
-        return self._context.database
-
-    @property
-    def transaction(self):
-        return self._context.transaction
+        self.txn = txn
 
 
 class Database(metaclass=AliasMeta):
@@ -164,8 +156,8 @@ def init_orm(settings: Settings) -> PeeweeORM:
 
 @contextlib.contextmanager
 def get_session(orm: PeeweeORM, cls: ParamAnnotation) -> typing.Generator[Session, None, None]:
-    with orm.get_database(cls._alias).execution_context() as context:
-        yield cls(context, orm.models[cls._alias].copy())
+    with orm.get_database(cls._alias).atomic() as txn:
+        yield cls(txn, orm.models[cls._alias].copy())
 
 
 def get_database(orm: PeeweeORM, cls: ParamAnnotation) -> peewee.Database:
